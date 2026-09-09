@@ -5,9 +5,12 @@ merges from the upstream `dev` branch, and the procedure to do one.
 
 ## Why a policy is necessary
 
-Upstream and kuru want different things. Jan is a general assistant and a coding agent. kuru is a
-roleplay client. Some upstream work is a direct gain for kuru. Some of it removes the parts that
-kuru is built on.
+kuru is the ChatGPT app crossed with SillyTavern, built on Jan for its interface and its provider
+support. Pull from upstream for those: provider support, model and tool integration, and bug fixes
+in the chat surfaces. The design direction decides everything else, and it is written down in
+`kuru thoughts and philosophy.txt`.
+
+Some upstream work is a direct gain. Some of it removes the parts kuru is built on.
 
 The second kind is the dangerous kind. Git does not report it as a conflict. When upstream deletes
 a file or a block that kuru never touched, the merge applies that deletion without a question. The
@@ -22,13 +25,14 @@ feature disappears and the build still passes.
 | `core/`, shared types, i18n plumbing | Take | Common ground with no kuru opinion |
 | `src-tauri/plugins/tauri-plugin-llamacpp` | Leave. kuru owns this | See "The llama.cpp split" |
 | `extensions/llamacpp-extension` | Leave. kuru owns this | Same |
-| Cowork, agent tools, skills, artifacts | Take, but do not wire in | Coding-agent features. They are inert and they keep the merge small |
+| Cowork, agent tools, skills, artifacts | Take and keep wired | Cowork is the assistant half of the assistant-vs-character split. See `kuru thoughts and philosophy.txt` |
 | Analytics and telemetry | Never take | kuru removed all of it on purpose |
 | Branding (`productName`, locale strings) | Never take | kuru is not Jan |
 
 ## The llama.cpp split
 
-Upstream `dev` deleted the llama.cpp downloader and replaced it with an engine that links llama.cpp
+kuru's base commit already had this change, and kuru already reverted it by hand. Upstream deleted
+the llama.cpp downloader and replaced it with an engine that links llama.cpp
 into the app. The pin is in `src-tauri/plugins/tauri-plugin-llamacpp/build.rs`. The CI job
 `engine-build.yml` compiles it on self-hosted CUDA, ROCm, and Metal runners.
 
@@ -76,6 +80,8 @@ Do not merge in the middle of a kuru feature. Finish the feature and commit it f
 6. Resolve every conflict under `src-tauri/plugins/tauri-plugin-llamacpp` and
    `extensions/llamacpp-extension` as "ours". Use `git checkout --ours -- <path>`.
 7. Restore the deleted files that the list above names. Use `git checkout HEAD -- <path>`.
+   CAUTION: `git checkout HEAD -- <dir>` restores what HEAD has. It does not remove a file that the
+   merge added and HEAD does not have. Delete those by hand.
 8. Resolve the `web-app` conflicts by hand. Read each one.
 9. Do the audit of silent losses. The next section gives it.
 10. Regenerate `web-app/src/routeTree.gen.ts`.
@@ -100,12 +106,25 @@ Then read the unused-variable errors from the typecheck. Each one is a signal. A
 kuru used before the merge, and that nothing uses after it, means the merge deleted the code that
 called it. Find what it called and put the code back.
 
-In the merge of 2026-09-09 this audit found four losses that no conflict reported:
+In the merge of 2026-09-09 this audit found these losses that no conflict reported:
 
 - The whole backend updater, deleted from `__root.tsx` and from `hooks/`.
 - The MTP backend-version gate in `ModelSetting.tsx`.
 - `web-app/src/lib/mtp.ts`, which three kuru files import.
-- The `mtp.needsUpgrade` locale string.
+- The `mtp.needsUpgrade` and `backendUpdater.*` locale strings.
+- The `noGpuHardware` readiness reason, and the "engine still preparing" onboarding state.
+- 90 lines of engine wiring in the `Makefile`, which pointed `make dev` at a worker build.
+
+The reverse audit matters as much. These files came back after kuru had deleted them:
+
+```
+git diff --name-only --diff-filter=D origin/main <kuru-checkpoint> > deleted.txt
+git ls-tree -r --name-only HEAD > now.txt
+comm -12 <(sort deleted.txt) <(sort now.txt)
+```
+
+That found 211 files. Read the list and decide each group. In 2026-09-09 the engine group (22
+files) went back out and Cowork (58) was kept.
 
 ## Renames
 
