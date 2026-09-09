@@ -16,6 +16,8 @@ permissions = [
     "allow-router-slots-idle",
     "allow-router-health",
     "allow-adopt-router",
+    "allow-calibrate-model",
+    "allow-cancel-calibrate",
     "allow-get-devices",
     "allow-generate-api-key",
     "allow-is-process-running",

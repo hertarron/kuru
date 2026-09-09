@@ -4,11 +4,31 @@ import { XIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import {
+  POINTER_EVENTS_RELEASE_DELAY,
+  releaseBodyPointerEvents,
+} from "@/lib/radix-pointer-events"
 
 function Dialog({
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  React.useEffect(() => releaseBodyPointerEvents, [])
+
+  const handleOpenChange = (open: boolean) => {
+    onOpenChange?.(open)
+    if (!open) {
+      window.setTimeout(releaseBodyPointerEvents, POINTER_EVENTS_RELEASE_DELAY)
+    }
+  }
+
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
 }
 
 function DialogTrigger({

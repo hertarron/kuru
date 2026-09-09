@@ -16,6 +16,8 @@ Default permissions for the llamacpp plugin
 - `allow-router-slots-idle`
 - `allow-router-health`
 - `allow-adopt-router`
+- `allow-calibrate-model`
+- `allow-cancel-calibrate`
 - `allow-get-devices`
 - `allow-generate-api-key`
 - `allow-is-process-running`
@@ -110,6 +112,58 @@ Enables the build_backend_download_items command without any pre-configured scop
 <td>
 
 Denies the build_backend_download_items command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`llamacpp:allow-calibrate-model`
+
+</td>
+<td>
+
+Enables the calibrate_model command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`llamacpp:deny-calibrate-model`
+
+</td>
+<td>
+
+Denies the calibrate_model command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`llamacpp:allow-cancel-calibrate`
+
+</td>
+<td>
+
+Enables the cancel_calibrate command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`llamacpp:deny-cancel-calibrate`
+
+</td>
+<td>
+
+Denies the cancel_calibrate command without any pre-configured scope.
 
 </td>
 </tr>

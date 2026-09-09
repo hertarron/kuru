@@ -16,7 +16,6 @@ const GUARDED_NAMESPACES = ['setup', 'model-errors']
 const DYNAMIC_KEYS: Record<string, string[]> = {
   setup: [
     'stageModel',
-    'stageConsent',
     'checkModelResolving',
     'checkModelWaiting',
     'checkModelDownloading',

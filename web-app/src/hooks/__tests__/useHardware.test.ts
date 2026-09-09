@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import {
   useHardware,
+  isDisplayGpu,
+  resolveGpuReserveMiB,
   HardwareData,
   SystemUsage,
   CPU,
@@ -445,5 +447,29 @@ describe('useHardware', () => {
 
       expect(result.current.hardwareData.gpus[0].activated).toBe(true)
     })
+  })
+})
+
+describe('resolveGpuReserveMiB', () => {
+  const hardware = {
+    gpus: [{ name: 'GTX 1080', uuid: 'gpu-display' }],
+  } as unknown as HardwareData
+  const usage = {
+    gpus: [{ uuid: 'gpu-display', used_memory: 1432, total_memory: 8192 }],
+  } as unknown as SystemUsage
+  const device = { id: 'CUDA1', name: 'GTX 1080' }
+
+  it('holds nothing back on a display card the user has not configured', () => {
+    // The card's 1432 MiB is already subtracted as measured use; reserving on
+    // top of it charged the desktop twice and cost real context. A busy card
+    // is still labelled as one, it just no longer moves the budget.
+    expect(isDisplayGpu(usage, hardware, 'GTX 1080')).toBe(true)
+    expect(resolveGpuReserveMiB(usage, hardware, device, {})).toBe(0)
+  })
+
+  it('honours the figure the user set for that card', () => {
+    expect(resolveGpuReserveMiB(usage, hardware, device, { CUDA1: 768 })).toBe(
+      768
+    )
   })
 })

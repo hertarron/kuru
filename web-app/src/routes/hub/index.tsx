@@ -1,43 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useVirtualizer } from '@tanstack/react-virtual'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { route } from '@/constants/routes'
 import { useModelSources } from '@/hooks/useModelSources'
-import { cn, formatBytes, sanitizeModelId } from '@/lib/utils'
-import { sumMlxModelBytes } from '@/lib/modelCompatibility'
+import { cn, sanitizeModelId } from '@/lib/utils'
 import { isMtpQuant } from '@/lib/mtp'
 import {
   useState,
   useMemo,
   useEffect,
-  ChangeEvent,
   useCallback,
   useRef,
   useTransition,
 } from 'react'
 import { useModelProvider } from '@/hooks/useModelProvider'
-import { Card, CardItem } from '@/containers/Card'
-import {
-  extractModelName,
-  extractDescription,
-  selectDefaultQuant,
-} from '@/lib/models'
-import {
-  IconChevronDown,
-  IconChevronUp,
-  IconDownload,
-  IconFileCode,
-  IconEye,
-  IconSearch,
-  IconTool,
-} from '@tabler/icons-react'
 import { Switch } from '@/components/ui/switch'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
-import { ModelInfoHoverCard } from '@/containers/ModelInfoHoverCard'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,6 +23,14 @@ import {
 import { useServiceHub } from '@/hooks/useServiceHub'
 import type { CatalogModel } from '@/services/models/types'
 import HeaderPage from '@/containers/HeaderPage'
+import { ModelCard } from '@/containers/ModelCard'
+import { ModelPreviewSheet } from '@/containers/ModelPreviewSheet'
+import { HubTitleRow } from '@/containers/HubTitleRow'
+import { HubFacetFilter, type Facet } from '@/containers/HubFacetFilter'
+import { ChubTagChips, type TagFilter } from '@/containers/ChubTagFilter'
+import { HubTabs } from '@/containers/HubTabs'
+import { HubSearch } from '@/containers/HubSearch'
+import { HUB_COLUMN, CARD_GRID } from '@/constants/layout'
 import { ChevronsUpDown, Loader } from 'lucide-react'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import Fuse from 'fuse.js'
@@ -55,47 +39,37 @@ import {
   prioritizeExactModelMatches,
 } from './searchRanking'
 import { useGeneralSetting } from '@/hooks/useGeneralSetting'
-import { DownloadButtonPlaceholder } from '@/containers/DownloadButton'
 import { useShallow } from 'zustand/shallow'
-import { ModelDownloadAction } from '@/containers/ModelDownloadAction'
-import { MlxModelDownloadAction } from '@/containers/MlxModelDownloadAction'
-import { DEFAULT_MODEL_QUANTIZATIONS } from '@/constants/models'
 import { Button } from '@/components/ui/button'
-import { RenderMarkdown } from '@/containers/RenderMarkdown'
 
 type SearchParams = {
   repo: string
 }
 
-type QuantTier = {
-  label: string
-  className: string
+/** Cards added to the DOM per page of the local catalog. */
+const PAGE_SIZE = 60
+
+/**
+ * What the models tab filters on instead of tags. Each is derived from the
+ * catalog entry, so the vocabulary is fixed rather than searched.
+ */
+const MODEL_FACET_TESTS: Record<string, (model: CatalogModel) => boolean> = {
+  Tools: (m) => !!m.tools,
+  Multimodal: (m) => (m.num_mmproj ?? 0) > 0,
+  MLX: (m) => !!m.is_mlx,
+  GGUF: (m) => !m.is_mlx,
 }
 
-function getQuantTier(modelId: string): QuantTier | null {
-  const id = modelId.toLowerCase()
-  if (/(^|[-_.])(f32|bf16|f16|q8|q6)([-_.]|$)/.test(id)) {
-    return {
-      label: 'Large',
-      className:
-        'bg-amber-500/10 text-amber-700 dark:text-amber-400',
-    }
-  }
-  if (/(^|[-_.])(q5|q4_k|iq4)/.test(id)) {
-    return {
-      label: 'Balanced',
-      className:
-        'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-    }
-  }
-  if (/(^|[-_.])(iq2|iq3|q2|q3|q4_0|q4_1)/.test(id)) {
-    return {
-      label: 'Small',
-      className: 'bg-blue-500/10 text-blue-600 dark:text-blue-400',
-    }
-  }
-  return null
-}
+const MODEL_FACETS: Facet[] = [
+  { id: 'Tools', label: 'Tools', description: 'Supports tool calling' },
+  {
+    id: 'Multimodal',
+    label: 'Multimodal',
+    description: 'Ships a vision projector',
+  },
+  { id: 'GGUF', label: 'GGUF', description: 'Runs on llama.cpp' },
+  { id: 'MLX', label: 'MLX', description: 'Apple Silicon only' },
+]
 
 export const Route = createFileRoute(route.hub.index as any)({
   component: HubContent,
@@ -106,7 +80,6 @@ export const Route = createFileRoute(route.hub.index as any)({
 
 function HubContent() {
   const [isPending, startTransition] = useTransition()
-  const parentRef = useRef(null)
   const huggingfaceToken = useGeneralSetting((state) => state.huggingfaceToken)
   const serviceHub = useServiceHub()
 
@@ -146,11 +119,9 @@ function HubContent() {
 
   const [searchValue, setSearchValue] = useState('')
   const [sortSelected, setSortSelected] = useState('newest')
-  const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>(
-    {}
-  )
   const [isSearching, setIsSearching] = useState(false)
   const [showOnlyDownloaded, setShowOnlyDownloaded] = useState(false)
+  const [facetFilters, setFacetFilters] = useState<TagFilter[]>([])
   const [huggingFaceRepo, setHuggingFaceRepo] = useState<CatalogModel | null>(
     null
   )
@@ -158,13 +129,6 @@ function HubContent() {
   const addModelSourceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
-
-  const toggleModelExpansion = useCallback((modelId: string) => {
-    setExpandedModels((prev) => ({
-      ...prev,
-      [modelId]: !prev[modelId],
-    }))
-  }, [])
 
   // Sorting functionality
   const sortedModels = useMemo(() => {
@@ -219,6 +183,15 @@ function HubContent() {
         cleanedSearchValue
       )
     }
+    // The catalog has no tags, so the facets are read off the entry itself.
+    for (const { tag, mode } of facetFilters) {
+      const has = MODEL_FACET_TESTS[tag]
+      if (!has) continue
+      filtered = filtered.filter((model) =>
+        mode === 'include' ? has(model) : !has(model)
+      )
+    }
+
     // Apply downloaded filter
     if (showOnlyDownloaded) {
       filtered = filtered
@@ -232,7 +205,8 @@ function HubContent() {
               ?.models.some(
                 (m: { id: string }) =>
                   m.id === variant.model_id ||
-                  m.id === `${model.developer}/${sanitizeModelId(variant.model_id)}`
+                  m.id ===
+                    `${model.developer}/${sanitizeModelId(variant.model_id)}`
               )
 
             const isMlxDownloaded = useModelProvider
@@ -241,7 +215,8 @@ function HubContent() {
               ?.models.some(
                 (m: { id: string }) =>
                   m.id === variant.model_id ||
-                  m.id === `${model.developer}/${sanitizeModelId(variant.model_id)}`
+                  m.id ===
+                    `${model.developer}/${sanitizeModelId(variant.model_id)}`
               )
 
             return isLlamaCppDownloaded || isMlxDownloaded
@@ -258,38 +233,40 @@ function HubContent() {
     sortedModels,
     debouncedSearchValue,
     showOnlyDownloaded,
+    facetFilters,
     huggingFaceRepo,
     searchOptions,
   ])
 
-  // Dynamic estimate size based on model state
-  const estimateSize = useCallback(
-    (index: number) => {
-      const model = filteredModels[index]
-      if (!model) return 100
-      // Base height + variants height if expanded
-      const baseHeight = 95
-      const variantHeight = 36
-      const expanded = expandedModels[model.model_name]
-      return expanded && (model.quants?.length ?? 0) > 1
-        ? baseHeight + (model.quants?.length ?? 0) * variantHeight
-        : baseHeight
-    },
-    [expandedModels, filteredModels]
+  // The catalog is filtered in memory, so paging here is only about DOM size:
+  // 300+ cards at once is a lot of nodes for a list nobody scrolls to the end
+  // of. Grows as the sentinel below the grid comes into view.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE)
+  }, [filteredModels])
+  const visibleModels = useMemo(
+    () => filteredModels.slice(0, visibleCount),
+    [filteredModels, visibleCount]
   )
 
-  // The virtualizer - only enable when we have models
-  const rowVirtualizer = useVirtualizer(
-    filteredModels.length > 0
-      ? {
-          count: filteredModels.length,
-          getScrollElement: () => parentRef.current,
-          estimateSize,
-          overscan: 8,
-          measureElement: (el: HTMLElement) => el.getBoundingClientRect().height,
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((count) => count + PAGE_SIZE)
         }
-      : { count: 0, getScrollElement: () => null, estimateSize: () => 0 }
-  )
+      },
+      { rootMargin: '600px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [visibleModels.length])
+
+  const [previewModel, setPreviewModel] = useState<CatalogModel | null>(null)
 
   useEffect(() => {
     // Use startTransition to keep UI responsive during data fetch
@@ -348,22 +325,17 @@ function HubContent() {
     }, 500)
   }
 
-  const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleSearchChange = (value: string) => {
     setIsSearching(false)
-    setSearchValue(e.target.value)
+    setSearchValue(value)
     setHuggingFaceRepo(null) // Clear previous repo info
 
     if (!showOnlyDownloaded) {
-      fetchHuggingFaceModel(e.target.value)
+      fetchHuggingFaceModel(value)
     }
   }
 
   const navigate = useNavigate()
-
-  const isRecommendedModel = useCallback((modelId: string) => {
-    return (extractModelName(modelId)?.toLowerCase() ===
-      'jan-nano-gguf') as boolean
-  }, [])
 
   const handleUseModel = useCallback(
     (modelId: string) => {
@@ -436,373 +408,131 @@ function HubContent() {
   }
 
   return (
-    <div className="flex flex-col h-svh w-full">
+    <div className="flex flex-col h-full w-full">
       <div className="flex flex-col h-full w-full ">
-        <HeaderPage>
-          <div className={cn("pr-3 py-3  h-10 w-full flex items-center justify-between relative z-20", !IS_MACOS && "pr-30")}>
-            <div className="flex items-center gap-2 w-full">
-              {isSearching ? (
-                <Loader className="shrink-0 size-4 animate-spin text-muted-foreground" />
-              ) : (
-                <IconSearch
-                  className="shrink-0 text-muted-foreground"
-                  size={14}
-                />
-              )}
-              <input
-                placeholder={t('hub:searchPlaceholder')}
-                value={searchValue}
-                onChange={handleSearchChange}
-                className="w-full focus:outline-none"
-              />
-            </div>
-            <div className="sm:flex items-center gap-2 shrink-0 hidden">
-              {renderFilter()}
-            </div>
+        <HeaderPage className="h-auto pt-1" bleed>
+          {/* pointer-events-none lets the blank middle fall through to the
+              window drag strip; only the tabs opt back in. Same column as the
+              cards below, so they line up. */}
+          <div
+            className={cn(
+              'pointer-events-none h-8 flex items-center relative z-20',
+              HUB_COLUMN
+            )}
+          >
+            <HubTabs className="pointer-events-auto" />
           </div>
         </HeaderPage>
-        <div ref={parentRef} className="p-4 w-full h-[calc(100%-60px)] overflow-y-auto! first-step-setup-local-provider">
-          <div className="flex flex-col h-full justify-between gap-4 gap-y-3 w-full md:w-4/5 xl:w-4/6 mx-auto">
-            {/* Show skeleton immediately on navigation, then show actual content when loaded */}
-            {(isInitialLoad || (loading && !filteredModels.length)) ? (
-              // Skeleton loading state for better perceived performance
-              <div className="flex flex-col gap-3 animate-pulse">
-                {[...Array(5)].map((_, i) => (
-                  <div
-                    key={i}
-                    className="bg-card border border-border rounded-lg p-4"
-                  >
-                    <div className="flex items-center justify-between gap-x-2">
-                      <div className="h-5 bg-muted rounded w-1/3" />
-                      <div className="flex items-center gap-3">
-                        <div className="h-4 bg-muted rounded w-20" />
-                        <div className="h-8 w-8 bg-muted rounded" />
-                      </div>
-                    </div>
-                    <div className="mt-3 h-4 bg-muted rounded w-full" />
-                    <div className="mt-2 h-4 bg-muted rounded w-2/3" />
-                    <div className="flex items-center gap-4 mt-3">
-                      <div className="h-4 bg-muted rounded w-16" />
-                      <div className="h-4 bg-muted rounded w-16" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : filteredModels.length === 0 ? (
-              <div className="flex items-center justify-center">
-                <div className="text-center text-muted-foreground">
-                  {t('hub:noModels')}
-                </div>
-              </div>
-            ) : (
-              <div
-                className={cn(
-                  'flex flex-col pb-2 mb-2 transition-opacity duration-200',
-                  isPending ? 'opacity-70' : 'opacity-100'
-                )}
-              >
-                <div className="flex items-center gap-2 justify-end sm:hidden">
+        {/* Search and grid share one scroll box: with the search row outside
+            it, the scrollbar narrowed the grid alone and the result count
+            drifted out of line with the controls above it. */}
+        <div className="flex-1 min-h-0 pb-6 overflow-y-auto! first-step-setup-local-provider">
+          <div className="sticky top-0 z-10 bg-neutral-50 dark:bg-background">
+            <HubSearch
+              value={searchValue}
+              onChange={handleSearchChange}
+              placeholder={t('hub:searchPlaceholder')}
+              leading={
+                isSearching ? (
+                  <Loader className="shrink-0 size-4 animate-spin text-muted-foreground" />
+                ) : undefined
+              }
+              trailing={
+                <div className="sm:flex items-center gap-2 shrink-0 hidden">
                   {renderFilter()}
                 </div>
-                <div
-                  style={{
-                    height: `${rowVirtualizer.getTotalSize()}px`,
-                    width: '100%',
-                    position: 'relative',
-                  }}
-                >
-                  {rowVirtualizer.getVirtualItems().map((virtualItem) => (
+              }
+              className="pt-2 pb-2"
+            />
+          </div>
+          <div className={HUB_COLUMN}>
+            <div className="flex flex-col gap-3 w-full">
+              <HubTitleRow
+                className="mt-2 -mb-1"
+                title={
+                  debouncedSearchValue
+                    ? `Results for “${debouncedSearchValue}”`
+                    : 'Models'
+                }
+                picker={
+                  <HubFacetFilter
+                    facets={MODEL_FACETS.filter(
+                      (f) => f.id !== 'MLX' || IS_MACOS
+                    )}
+                    filters={facetFilters}
+                    setFilters={setFacetFilters}
+                  />
+                }
+                chips={
+                  <ChubTagChips
+                    filters={facetFilters}
+                    setFilters={setFacetFilters}
+                  />
+                }
+                count={
+                  filteredModels.length
+                    ? `${filteredModels.length} model${filteredModels.length === 1 ? '' : 's'}`
+                    : undefined
+                }
+              />
+              {isInitialLoad || (loading && !filteredModels.length) ? (
+                <div className={CARD_GRID}>
+                  {[...Array(8)].map((_, i) => (
                     <div
-                      key={virtualItem.key}
-                      data-index={virtualItem.index}
-                      ref={rowVirtualizer.measureElement}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        transform: `translateY(${virtualItem.start}px)`,
-                        paddingBottom: 8,
-                      }}
+                      key={i}
+                      className="rounded-xl border p-4 min-h-44 flex flex-col gap-3 animate-pulse"
                     >
-                      <Card
-                        header={
-                          <div className="flex items-start justify-between gap-x-3">
-                            <div
-                              className="cursor-pointer min-w-0 flex-1"
-                              onClick={() => {
-                                const name =
-                                  filteredModels[virtualItem.index].model_name
-                                const isHfRepo = name.includes('/')
-                                navigate({
-                                  to: route.hub.model,
-                                  params: {
-                                    modelId: isHfRepo
-                                      ? name.split('/').pop()!
-                                      : name,
-                                  },
-                                  search: isHfRepo ? { repo: name } : {},
-                                })
-                              }}
-                            >
-                              <h1
-                                className={cn(
-                                  'text-foreground font-medium text-base capitalize sm:max-w-none',
-                                  isRecommendedModel(
-                                    filteredModels[virtualItem.index]
-                                      .model_name
-                                  )
-                                    ? 'hub-model-card-step'
-                                    : ''
-                                )}
-                                title={
-                                  extractModelName(
-                                    filteredModels[virtualItem.index]
-                                      .model_name
-                                  ) || ''
-                                }
-                              >
-                                {extractModelName(
-                                  filteredModels[virtualItem.index].model_name
-                                ) || ''}
-                              </h1>
-                            </div>
-                            <div className="shrink-0 flex flex-col items-end gap-2">
-                              <div className="flex items-center gap-2">
-                                <span className="text-muted-foreground font-medium text-xs">
-                                  {filteredModels[virtualItem.index].is_mlx
-                                    ? formatBytes(
-                                        sumMlxModelBytes(
-                                          filteredModels[virtualItem.index]
-                                        ) || undefined
-                                      )
-                                    : selectDefaultQuant(
-                                        filteredModels[virtualItem.index].quants,
-                                        DEFAULT_MODEL_QUANTIZATIONS
-                                      )?.file_size}
-                                </span>
-                                <ModelInfoHoverCard
-                                  model={filteredModels[virtualItem.index]}
-                                  defaultModelQuantizations={
-                                    DEFAULT_MODEL_QUANTIZATIONS
-                                  }
-                                  variant={selectDefaultQuant(
-                                    filteredModels[virtualItem.index].quants,
-                                    DEFAULT_MODEL_QUANTIZATIONS
-                                  )}
-                                  isDefaultVariant={true}
-                                />
-                              </div>
-                              {filteredModels[virtualItem.index].is_mlx ? (
-                                <MlxModelDownloadAction
-                                  model={filteredModels[virtualItem.index]}
-                                />
-                              ) : (
-                                <DownloadButtonPlaceholder
-                                  model={filteredModels[virtualItem.index]}
-                                  handleUseModel={handleUseModel}
-                                />
-                              )}
-                            </div>
-                          </div>
-                        }
-                      >
-                        <div className="line-clamp-2 mt-3 text-muted-foreground leading-normal">
-                          <RenderMarkdown
-                            className="select-none reset-heading"
-                            components={{
-                              a: ({ ...props }) => (
-                                <a
-                                  {...props}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                />
-                              ),
-                            }}
-                            content={
-                              extractDescription(
-                                filteredModels[virtualItem.index]?.description
-                              ) || ''
-                            }
-                          />
-                        </div>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="capitalize text-foreground">
-                            {t('hub:by')}{' '}
-                            {filteredModels[virtualItem.index]?.developer}
-                          </span>
-                          <div className="flex items-center gap-4 ml-2">
-                            <div className="flex items-center gap-1">
-                              <IconDownload
-                                size={18}
-                                className="text-muted-foreground"
-                                title={t('hub:downloads')}
-                              />
-                              <span className="text-foreground">
-                                {filteredModels[virtualItem.index]
-                                  .downloads || 0}
-                              </span>
-                            </div>
-                            {!filteredModels[virtualItem.index].is_mlx && (
-                              <div className="flex items-center gap-1">
-                                <IconFileCode
-                                  size={20}
-                                  className="text-muted-foreground"
-                                  title={t('hub:variants')}
-                                />
-                                <span className="text-foreground">
-                                  {filteredModels[virtualItem.index].quants
-                                    ?.length || 0}
-                                </span>
-                              </div>
-                            )}
-                            {filteredModels[virtualItem.index].is_mlx && (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-secondary text-muted-foreground">
-                                    MLX
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>Requires MLX engine (Apple Silicon only)</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            )}
-                            <div className="flex gap-1.5 items-center">
-                              {(filteredModels[virtualItem.index].num_mmproj ?? 0) >
-                                0 && (
-                                <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-secondary text-foreground/80">
-                                  <IconEye size={13} />
-                                  {t('multimodal')}
-                                </span>
-                              )}
-                              {filteredModels[virtualItem.index].tools && (
-                                <span className="inline-flex items-center gap-1 text-xs font-medium px-1.5 py-0.5 rounded bg-secondary text-foreground/80">
-                                  <IconTool size={13} />
-                                  {t('tools')}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          {(filteredModels[virtualItem.index].quants?.length ?? 0) >
-                            1 && (
-                            <button
-                              className="flex items-center gap-1 hub-show-variants-step ml-auto"
-                              onClick={() =>
-                                toggleModelExpansion(
-                                  filteredModels[virtualItem.index]
-                                    .model_name
-                                )
-                              }
-                            >
-                              <span className="text-foreground">
-                                {t('hub:showVariants')}
-                              </span>
-                              {expandedModels[
-                                filteredModels[virtualItem.index].model_name
-                              ] ? (
-                                <IconChevronUp
-                                  size={18}
-                                  className="text-muted-foreground"
-                                />
-                              ) : (
-                                <IconChevronDown
-                                  size={18}
-                                  className="text-muted-foreground"
-                                />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                        {expandedModels[
-                          filteredModels[virtualItem.index].model_name
-                        ] &&
-                          (filteredModels[virtualItem.index].quants?.length ?? 0) >
-                            0 &&
-                          (() => {
-                            const quants =
-                              filteredModels[virtualItem.index].quants ?? []
-                            const recommendedId = selectDefaultQuant(
-                              quants,
-                              DEFAULT_MODEL_QUANTIZATIONS
-                            )?.model_id
-                            return (
-                            <div className="mt-5">
-                              {quants.map(
-                                (variant) => (
-                                  <CardItem
-                                    key={variant.model_id}
-                                    title={
-                                      <div className="flex items-center gap-2">
-                                        <span>{variant.model_id}</span>
-                                        {(() => {
-                                          const tier = getQuantTier(
-                                            variant.model_id
-                                          )
-                                          return tier ? (
-                                            <span
-                                              className={cn(
-                                                'text-xs font-medium px-1.5 py-0.5 rounded',
-                                                tier.className
-                                              )}
-                                            >
-                                              {tier.label}
-                                            </span>
-                                          ) : null
-                                        })()}
-                                        {variant.model_id === recommendedId && (
-                                          <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary">
-                                            Recommended
-                                          </span>
-                                        )}
-                                      </div>
-                                    }
-                                    actions={
-                                      <div className="flex items-center gap-2">
-                                        <p className="text-muted-foreground font-medium text-xs">
-                                          {variant.file_size}
-                                        </p>
-                                        <ModelInfoHoverCard
-                                          model={
-                                            filteredModels[virtualItem.index]
-                                          }
-                                          variant={variant}
-                                          defaultModelQuantizations={
-                                            DEFAULT_MODEL_QUANTIZATIONS
-                                          }
-                                        />
-                                        {filteredModels[virtualItem.index]
-                                          .is_mlx ? (
-                                          <MlxModelDownloadAction
-                                            model={
-                                              filteredModels[virtualItem.index]
-                                            }
-                                          />
-                                        ) : (
-                                          <ModelDownloadAction
-                                            variant={variant}
-                                            model={
-                                              filteredModels[virtualItem.index]
-                                            }
-                                          />
-                                        )}
-                                      </div>
-                                    }
-                                  />
-                                )
-                              )}
-                            </div>
-                            )
-                          })()}
-                      </Card>
+                      <div className="h-4 bg-muted rounded w-2/3" />
+                      <div className="h-3 bg-muted rounded w-full" />
+                      <div className="h-3 bg-muted rounded w-3/4" />
+                      <div className="mt-auto h-8 bg-muted rounded w-24 self-end" />
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : filteredModels.length === 0 ? (
+                <div className="flex items-center justify-center py-24">
+                  <div className="text-center text-muted-foreground">
+                    {t('hub:noModels')}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className={cn(
+                    'flex flex-col gap-3 pb-2 mb-2 transition-opacity duration-200',
+                    isPending ? 'opacity-70' : 'opacity-100'
+                  )}
+                >
+                  <div className="flex items-center gap-2 justify-end sm:hidden">
+                    {renderFilter()}
+                  </div>
+                  <div className={CARD_GRID}>
+                    {visibleModels.map((model) => (
+                      <ModelCard
+                        key={model.model_name}
+                        model={model}
+                        onOpen={setPreviewModel}
+                        onUseModel={handleUseModel}
+                      />
+                    ))}
+                  </div>
+                  {/* The catalog is already in memory, so "loading more" is only
+                    about how much of it is in the DOM at once. */}
+                  {visibleModels.length < filteredModels.length && (
+                    <div ref={sentinelRef} className="h-px" />
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
+
+      <ModelPreviewSheet
+        model={previewModel}
+        onOpenChange={(open) => {
+          if (!open) setPreviewModel(null)
+        }}
+      />
     </div>
   )
 }

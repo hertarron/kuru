@@ -51,6 +51,16 @@ pub struct GgufMetadata {
     pub version: u32,
     pub tensor_count: u64,
     pub metadata: HashMap<String, String>,
+    pub tensors: Vec<GgufTensorInfo>,
+}
+
+/// One entry of the tensor table that follows the metadata block. The context
+/// planner sizes each layer from these, which metadata alone cannot give.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GgufTensorInfo {
+    pub name: String,
+    pub dims: Vec<u64>,
+    pub ggml_type: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -366,3 +366,59 @@ export function mergeEmbedResponses(
 
   return aggregated
 }
+
+/**
+ * Stems that name a file rather than a model, so the GGUF's own name is worth
+ * more than the filename. Compared after any quant tag is trimmed, so
+ * `ggml-model-Q4_K_M.gguf` matches `ggml-model`.
+ */
+const GENERIC_MODEL_STEMS = new Set([
+  'model',
+  'models',
+  'ggml-model',
+  'ggml_model',
+  'pytorch_model',
+  'consolidated',
+  'merged',
+  'output',
+  'final',
+  'gguf',
+])
+
+const QUANT_SUFFIX = /[-_.](?:iq\d[\w.]*|q\d[\w.]*|bf16|fp16|fp32|f16|f32)$/i
+/** Sharded downloads: `…-00001-of-00005`. */
+const SHARD_SUFFIX = /[-_.]0*\d+[-_]of[-_]0*\d+$/i
+
+/**
+ * The name to show for an imported model.
+ *
+ * The filename wins. `general.name` is free text written at conversion time,
+ * and the two ways it goes wrong are both common: a finetune that never
+ * updated it still carries the base model's name (Rocinante-XL-16B reports
+ * "Mistral Nemo Instruct 2407"), and a quantizer's working name survives into
+ * the release ("Abl 27b" for Qwen3.8-27B). The filename is what the uploader
+ * chose to publish under, so it matches what the user went looking for.
+ *
+ * The metadata is the better answer only when the filename carries nothing —
+ * a generic stem, or an empty one — which is where converter defaults like
+ * `ggml-model-Q4_K_M.gguf` land.
+ */
+export function resolveImportedModelName(
+  modelPath: string,
+  ggufName: unknown
+): string | undefined {
+  const metadata =
+    typeof ggufName === 'string' && ggufName.trim().length > 0
+      ? ggufName.trim().replace(/\s+/g, '-')
+      : undefined
+
+  const file = (modelPath.split(/[\\/]/).pop() ?? '')
+    .replace(/\.gguf$/i, '')
+    .replace(SHARD_SUFFIX, '')
+    .trim()
+  if (file.length === 0) return metadata
+
+  const stem = file.replace(QUANT_SUFFIX, '')
+  if (GENERIC_MODEL_STEMS.has(stem.toLowerCase())) return metadata
+  return file
+}

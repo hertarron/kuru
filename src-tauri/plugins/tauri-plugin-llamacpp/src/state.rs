@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +19,14 @@ pub struct LlamacppState {
     /// Persistent `/models/sse` subscriber (router-side unload notifications),
     /// alive for the router's lifetime. Aborted whenever the router stops.
     pub unload_watcher: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// PID of a running calibration probe, 0 when none. Only one probe runs
+    /// at a time (they share one preset and one log file), so a single slot
+    /// is enough for `cancel_calibrate` to find a stuck load.
+    pub calibrate_pid: AtomicU32,
+    /// Set by `cancel_calibrate`; polled by the `calibrate_model` wait loop so
+    /// a probe stuck in first-time RAM warm-up stops promptly instead of
+    /// hanging until the timeout.
+    pub calibrate_cancel: AtomicBool,
 }
 
 impl Default for LlamacppState {
@@ -27,6 +35,8 @@ impl Default for LlamacppState {
             router: Mutex::new(None),
             router_pid: AtomicU32::new(0),
             unload_watcher: Mutex::new(None),
+            calibrate_pid: AtomicU32::new(0),
+            calibrate_cancel: AtomicBool::new(false),
         }
     }
 }

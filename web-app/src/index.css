@@ -81,6 +81,13 @@
    --font-size-base before inheriting, so overriding it alone changes nothing
    for rules reading var(--text-*) (markdown.css). */
 .message-zoom {
+  /* The reply body has no font-size of its own -- it inherits up to <body>'s
+     text-sm, which reads the root --font-size-base and never sees the zoom.
+     Setting it here makes inherited text scale with the zoom too, so the whole
+     message (reply, thinking block, metadata row) zooms as one unit instead of
+     only the text-xs/text-sm utilities ballooning while the reply stays put.
+     var(--text-sm) matches body's current text-sm, so zoom 1 renders identically. */
+  font-size: var(--text-sm);
   --text-xs: calc(var(--font-size-base) * 0.75);
   --text-sm: calc(var(--font-size-base) * 0.875);
   --text-base: var(--font-size-base);
@@ -219,6 +226,31 @@
 
   ::-webkit-scrollbar-track {
     background: transparent;
+  }
+
+  /* Defaults to opaque white, which reads as a stray light square wherever a
+     scrollbar meets a resize grip. */
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* The default resizer glyph is an opaque white block, so it gets replaced
+     rather than hidden -- transparent leaves a resizable box with no visible
+     handle at all. Diagonal hatch, same greys as the scrollbar thumb. */
+  ::-webkit-resizer {
+    background: repeating-linear-gradient(
+      315deg,
+      transparent 0 2px,
+      oklch(0.708 0 0 / 45%) 2px 3px
+    );
+  }
+
+  .dark ::-webkit-resizer {
+    background: repeating-linear-gradient(
+      315deg,
+      transparent 0 2px,
+      oklch(0.985 0 0 / 30%) 2px 3px
+    );
   }
 
   ::-webkit-scrollbar-thumb {

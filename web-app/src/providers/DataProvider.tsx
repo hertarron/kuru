@@ -4,11 +4,14 @@ import { useAppUpdater } from '@/hooks/useAppUpdater'
 import {
   useGeneralSetting,
   HUGGINGFACE_TOKEN_SECRET_KEY,
+  CHUB_TOKEN_SECRET_KEY,
 } from '@/hooks/useGeneralSetting'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import { useEffect } from 'react'
 import { useMCPServers, DEFAULT_MCP_SETTINGS } from '@/hooks/useMCPServers'
-import { useAssistant } from '@/hooks/useAssistant'
+import { useCharacters } from '@/hooks/useCharacters'
+import { useLorebooks } from '@/hooks/useLorebooks'
+import { usePersonas, migrateUserNameToPersona } from '@/hooks/usePersonas'
 import { useNavigate } from '@tanstack/react-router'
 import { route } from '@/constants/routes'
 import { useThreads } from '@/hooks/useThreads'
@@ -183,7 +186,7 @@ export function DataProvider() {
   const { checkForUpdate } = useAppUpdater()
   const autoUpdateCheck = useGeneralSetting((s) => s.autoUpdateCheck)
   const { setServers, setSettings } = useMCPServers()
-  const { setAssistants } = useAssistant()
+  const { setCharacters } = useCharacters()
   const { setThreads } = useThreads()
   const setThreadsLoading = useThreads((s) => s.setThreadsLoading)
   const navigate = useNavigate()
@@ -230,6 +233,12 @@ export function DataProvider() {
         if (token) useGeneralSetting.getState().setHuggingfaceToken(token)
       })
       .catch(() => {})
+    // Same for the Chub.ai token.
+    invoke<string | null>('get_secret', { key: CHUB_TOKEN_SECRET_KEY })
+      .then((token) => {
+        if (token) useGeneralSetting.getState().setChubToken(token)
+      })
+      .catch(() => {})
     serviceHub
       .mcp()
       .getMCPConfig()
@@ -241,15 +250,34 @@ export function DataProvider() {
       .assistants()
       .getAssistants()
       .then((data) => {
-        // Only update assistants if we have valid data
+        // Only update characters if we have valid data
         if (data && Array.isArray(data) && data.length > 0) {
-          setAssistants(data as unknown as Assistant[])
+          setCharacters(data as unknown as Assistant[])
         } else {
-          setAssistants(null)
+          setCharacters(null)
         }
       })
       .catch((error) => {
-        console.warn('Failed to load assistants, keeping default:', error)
+        console.warn('Failed to load characters, keeping default:', error)
+      })
+    serviceHub
+      .lorebooks()
+      .getLorebooks()
+      .then((books) => useLorebooks.getState().setLorebooks(books))
+      .catch((error) => {
+        console.warn('Failed to load lorebooks:', error)
+        useLorebooks.getState().setLorebooks([])
+      })
+    serviceHub
+      .personas()
+      .getPersonas()
+      .then((personas) => {
+        usePersonas.getState().setPersonas(personas)
+        migrateUserNameToPersona()
+      })
+      .catch((error) => {
+        console.warn('Failed to load personas:', error)
+        usePersonas.getState().setPersonas([])
       })
     serviceHub.deeplink().getCurrent().then(handleDeepLink)
 

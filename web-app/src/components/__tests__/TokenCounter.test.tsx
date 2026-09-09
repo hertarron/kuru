@@ -80,13 +80,20 @@ describe('TokenCounter', () => {
     expect(span.className).not.toContain('text-amber-500')
   })
 
-  it('calls calculateTokens when clicked', async () => {
+  it('calls onClick when clicked', async () => {
     const user = userEvent.setup()
-    const mocks = mockTokens({ tokenCount: 500, maxTokens: 1000 })
-    const { container } = render(<TokenCounter />)
+    mockTokens({ tokenCount: 500, maxTokens: 1000 })
+    const onClick = vi.fn()
+    const { container } = render(<TokenCounter onClick={onClick} />)
     const clickable = container.querySelector('.cursor-pointer')!
     await user.click(clickable)
-    expect(mocks.calculateTokens).toHaveBeenCalledTimes(1)
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('is not interactive without onClick', () => {
+    mockTokens({ tokenCount: 500, maxTokens: 1000 })
+    const { container } = render(<TokenCounter />)
+    expect(container.querySelector('.cursor-pointer')).toBeNull()
   })
 
   it('renders the SVG progress ring', () => {
@@ -98,16 +105,12 @@ describe('TokenCounter', () => {
     expect(circles.length).toBe(2)
   })
 
-  it('renders nothing when maxTokens is unavailable', () => {
+  // The badge doubles as the context-visualizer trigger, so it stays mounted
+  // before any turn has reported numbers rather than vanishing from the chatbox.
+  it('renders a zero badge when neither a limit nor a count is known', () => {
     mockTokens({ tokenCount: 0, maxTokens: undefined })
-    const { container } = render(<TokenCounter />)
-    expect(container.firstChild).toBeNull()
-  })
-
-  it('renders nothing when maxTokens is 0', () => {
-    mockTokens({ tokenCount: 0, maxTokens: 0 })
-    const { container } = render(<TokenCounter />)
-    expect(container.firstChild).toBeNull()
+    render(<TokenCounter />)
+    expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(1)
   })
 
   it('renders a count-only badge (no percentage) when maxTokens is unavailable but tokens exist', () => {

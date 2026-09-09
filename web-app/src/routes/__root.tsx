@@ -11,11 +11,9 @@ import { DataProvider } from '@/providers/DataProvider'
 import { route } from '@/constants/routes'
 import { ExtensionProvider } from '@/providers/ExtensionProvider'
 import { ToasterProvider } from '@/providers/ToasterProvider'
-import { useAnalytic } from '@/hooks/useAnalytic'
 import { useIsOnboarding } from '@/hooks/useIsOnboarding'
-import { PromptAnalytic } from '@/containers/analytics/PromptAnalytic'
-import { AnalyticProvider } from '@/providers/AnalyticProvider'
 import { useLeftPanel } from '@/hooks/useLeftPanel'
+import { useSidebarLocked } from '@/lib/sidebar-routes'
 import { TranslationProvider } from '@/i18n/TranslationContext'
 import OutOfContextPromiseModal from '@/containers/dialogs/OutOfContextDialog'
 import AttachmentIngestionDialog from '@/containers/dialogs/AttachmentIngestionDialog'
@@ -30,6 +28,7 @@ import { WindowResizeGrips } from '@/components/WindowResizeGrips'
 import ErrorDialog from '@/containers/dialogs/ErrorDialog'
 import LlamacppBusyOnExitDialog from '@/containers/dialogs/LlamacppBusyOnExitDialog'
 import LlamacppOomListener from '@/containers/dialogs/LlamacppOomListener'
+import AutoCalibration from '@/containers/dialogs/AutoCalibration'
 import MissingDependenciesDialog from '@/containers/dialogs/MissingDependenciesDialog'
 
 export const Route = createRootRoute({
@@ -38,7 +37,6 @@ export const Route = createRootRoute({
 })
 
 const AppLayout = () => {
-  const { productAnalyticPrompt } = useAnalytic()
   // The setup screen is the only onboarding surface: everything below that would
   // otherwise stack on top of it is deferred until it is done.
   const isOnboarding = useIsOnboarding()
@@ -52,12 +50,14 @@ const AppLayout = () => {
   return (
     <div className="bg-neutral-50 dark:bg-background size-full relative">
       <SidebarProvider
-        open={isLeftPanelOpen}
+        // Settings/hub lock the sidebar expanded (no collapse affordances are
+        // rendered there); the store keeps the chat state untouched so it is
+        // restored when the user navigates back into a thread.
+        open={useSidebarLocked() || isLeftPanelOpen}
         onOpenChange={setLeftPanel}
         defaultWidth={sidebarWidth}
         onWidthChange={setLeftPanelWidth}
       >
-        <AnalyticProvider />
         <KeyboardShortcutsProvider />
         {/* Fake absolute panel top to enable window drag */}
         {(IS_WINDOWS || IS_LINUX) && <WindowControls />}
@@ -73,13 +73,15 @@ const AppLayout = () => {
         <DialogAppUpdater />
         {!isOnboarding && <BackendUpdater />}
         <LeftSidebar />
-        <SidebarInset>
-          <div className="bg-neutral-50 dark:bg-background size-full">
+        <SidebarInset className="h-svh overflow-hidden">
+          {/* The floating sidebar card keeps an 8px gutter top/bottom
+              (sidebar.tsx p-2); inset the whole content column to match
+              whether the sidebar is open or not, so headers and input boxes
+              hold the same frame. Routes use h-full. */}
+          <div className="bg-neutral-50 dark:bg-background h-full py-2">
             <Outlet />
           </div>
         </SidebarInset>
-
-        {productAnalyticPrompt && !isOnboarding && <PromptAnalytic />}
       </SidebarProvider>
     </div>
   )
@@ -132,6 +134,7 @@ function RootLayout() {
           <ErrorDialog />
           <LlamacppBusyOnExitDialog />
           <LlamacppOomListener />
+          <AutoCalibration />
           <MissingDependenciesDialog />
           <OutOfContextPromiseModal />
         </TranslationProvider>

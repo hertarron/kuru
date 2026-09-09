@@ -13,11 +13,14 @@ import { Route as SystemMonitorRouteImport } from './routes/system-monitor'
 import { Route as LogsRouteImport } from './routes/logs'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as HubIndexRouteImport } from './routes/hub/index'
+import { Route as CharactersIndexRouteImport } from './routes/characters/index'
 import { Route as ThreadsThreadIdRouteImport } from './routes/threads/$threadId'
 import { Route as SettingsWebSearchRouteImport } from './routes/settings/web-search'
 import { Route as SettingsShortcutsRouteImport } from './routes/settings/shortcuts'
-import { Route as SettingsPrivacyRouteImport } from './routes/settings/privacy'
+import { Route as SettingsPersonasRouteImport } from './routes/settings/personas'
+import { Route as SettingsMemoryRouteImport } from './routes/settings/memory'
 import { Route as SettingsMcpServersRouteImport } from './routes/settings/mcp-servers'
+import { Route as SettingsLorebooksRouteImport } from './routes/settings/lorebooks'
 import { Route as SettingsLocalApiServerRouteImport } from './routes/settings/local-api-server'
 import { Route as SettingsInterfaceRouteImport } from './routes/settings/interface'
 import { Route as SettingsHttpsProxyRouteImport } from './routes/settings/https-proxy'
@@ -25,11 +28,15 @@ import { Route as SettingsHardwareRouteImport } from './routes/settings/hardware
 import { Route as SettingsGeneralRouteImport } from './routes/settings/general'
 import { Route as SettingsExtensionsRouteImport } from './routes/settings/extensions'
 import { Route as SettingsClaudeCodeRouteImport } from './routes/settings/claude-code'
+import { Route as SettingsCharactersRouteImport } from './routes/settings/characters'
 import { Route as SettingsAttachmentsRouteImport } from './routes/settings/attachments'
-import { Route as SettingsAssistantRouteImport } from './routes/settings/assistant'
 import { Route as ProjectProjectIdRouteImport } from './routes/project/$projectId'
+import { Route as LorebooksLorebookIdRouteImport } from './routes/lorebooks/$lorebookId'
 import { Route as LocalApiServerLogsRouteImport } from './routes/local-api-server/logs'
+import { Route as HubLorebooksRouteImport } from './routes/hub/lorebooks'
+import { Route as HubCharactersRouteImport } from './routes/hub/characters'
 import { Route as HubModelIdRouteImport } from './routes/hub/$modelId'
+import { Route as CharactersCharacterIdRouteImport } from './routes/characters/$characterId'
 import { Route as SettingsProvidersIndexRouteImport } from './routes/settings/providers/index'
 import { Route as SettingsProvidersProviderNameRouteImport } from './routes/settings/providers/$providerName'
 
@@ -53,6 +60,11 @@ const HubIndexRoute = HubIndexRouteImport.update({
   path: '/hub/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CharactersIndexRoute = CharactersIndexRouteImport.update({
+  id: '/characters/',
+  path: '/characters/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ThreadsThreadIdRoute = ThreadsThreadIdRouteImport.update({
   id: '/threads/$threadId',
   path: '/threads/$threadId',
@@ -68,14 +80,24 @@ const SettingsShortcutsRoute = SettingsShortcutsRouteImport.update({
   path: '/settings/shortcuts',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SettingsPrivacyRoute = SettingsPrivacyRouteImport.update({
-  id: '/settings/privacy',
-  path: '/settings/privacy',
+const SettingsPersonasRoute = SettingsPersonasRouteImport.update({
+  id: '/settings/personas',
+  path: '/settings/personas',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsMemoryRoute = SettingsMemoryRouteImport.update({
+  id: '/settings/memory',
+  path: '/settings/memory',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsMcpServersRoute = SettingsMcpServersRouteImport.update({
   id: '/settings/mcp-servers',
   path: '/settings/mcp-servers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsLorebooksRoute = SettingsLorebooksRouteImport.update({
+  id: '/settings/lorebooks',
+  path: '/settings/lorebooks',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsLocalApiServerRoute = SettingsLocalApiServerRouteImport.update({
@@ -113,14 +135,14 @@ const SettingsClaudeCodeRoute = SettingsClaudeCodeRouteImport.update({
   path: '/settings/claude-code',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsCharactersRoute = SettingsCharactersRouteImport.update({
+  id: '/settings/characters',
+  path: '/settings/characters',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsAttachmentsRoute = SettingsAttachmentsRouteImport.update({
   id: '/settings/attachments',
   path: '/settings/attachments',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsAssistantRoute = SettingsAssistantRouteImport.update({
-  id: '/settings/assistant',
-  path: '/settings/assistant',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectProjectIdRoute = ProjectProjectIdRouteImport.update({
@@ -128,14 +150,34 @@ const ProjectProjectIdRoute = ProjectProjectIdRouteImport.update({
   path: '/project/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LorebooksLorebookIdRoute = LorebooksLorebookIdRouteImport.update({
+  id: '/lorebooks/$lorebookId',
+  path: '/lorebooks/$lorebookId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LocalApiServerLogsRoute = LocalApiServerLogsRouteImport.update({
   id: '/local-api-server/logs',
   path: '/local-api-server/logs',
   getParentRoute: () => rootRouteImport,
 } as any)
+const HubLorebooksRoute = HubLorebooksRouteImport.update({
+  id: '/hub/lorebooks',
+  path: '/hub/lorebooks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HubCharactersRoute = HubCharactersRouteImport.update({
+  id: '/hub/characters',
+  path: '/hub/characters',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HubModelIdRoute = HubModelIdRouteImport.update({
   id: '/hub/$modelId',
   path: '/hub/$modelId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CharactersCharacterIdRoute = CharactersCharacterIdRouteImport.update({
+  id: '/characters/$characterId',
+  path: '/characters/$characterId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsProvidersIndexRoute = SettingsProvidersIndexRouteImport.update({
@@ -154,11 +196,15 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/logs': typeof LogsRoute
   '/system-monitor': typeof SystemMonitorRoute
+  '/characters/$characterId': typeof CharactersCharacterIdRoute
   '/hub/$modelId': typeof HubModelIdRoute
+  '/hub/characters': typeof HubCharactersRoute
+  '/hub/lorebooks': typeof HubLorebooksRoute
   '/local-api-server/logs': typeof LocalApiServerLogsRoute
+  '/lorebooks/$lorebookId': typeof LorebooksLorebookIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
-  '/settings/assistant': typeof SettingsAssistantRoute
   '/settings/attachments': typeof SettingsAttachmentsRoute
+  '/settings/characters': typeof SettingsCharactersRoute
   '/settings/claude-code': typeof SettingsClaudeCodeRoute
   '/settings/extensions': typeof SettingsExtensionsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -166,11 +212,14 @@ export interface FileRoutesByFullPath {
   '/settings/https-proxy': typeof SettingsHttpsProxyRoute
   '/settings/interface': typeof SettingsInterfaceRoute
   '/settings/local-api-server': typeof SettingsLocalApiServerRoute
+  '/settings/lorebooks': typeof SettingsLorebooksRoute
   '/settings/mcp-servers': typeof SettingsMcpServersRoute
-  '/settings/privacy': typeof SettingsPrivacyRoute
+  '/settings/memory': typeof SettingsMemoryRoute
+  '/settings/personas': typeof SettingsPersonasRoute
   '/settings/shortcuts': typeof SettingsShortcutsRoute
   '/settings/web-search': typeof SettingsWebSearchRoute
   '/threads/$threadId': typeof ThreadsThreadIdRoute
+  '/characters/': typeof CharactersIndexRoute
   '/hub/': typeof HubIndexRoute
   '/settings/providers/$providerName': typeof SettingsProvidersProviderNameRoute
   '/settings/providers/': typeof SettingsProvidersIndexRoute
@@ -179,11 +228,15 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/logs': typeof LogsRoute
   '/system-monitor': typeof SystemMonitorRoute
+  '/characters/$characterId': typeof CharactersCharacterIdRoute
   '/hub/$modelId': typeof HubModelIdRoute
+  '/hub/characters': typeof HubCharactersRoute
+  '/hub/lorebooks': typeof HubLorebooksRoute
   '/local-api-server/logs': typeof LocalApiServerLogsRoute
+  '/lorebooks/$lorebookId': typeof LorebooksLorebookIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
-  '/settings/assistant': typeof SettingsAssistantRoute
   '/settings/attachments': typeof SettingsAttachmentsRoute
+  '/settings/characters': typeof SettingsCharactersRoute
   '/settings/claude-code': typeof SettingsClaudeCodeRoute
   '/settings/extensions': typeof SettingsExtensionsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -191,11 +244,14 @@ export interface FileRoutesByTo {
   '/settings/https-proxy': typeof SettingsHttpsProxyRoute
   '/settings/interface': typeof SettingsInterfaceRoute
   '/settings/local-api-server': typeof SettingsLocalApiServerRoute
+  '/settings/lorebooks': typeof SettingsLorebooksRoute
   '/settings/mcp-servers': typeof SettingsMcpServersRoute
-  '/settings/privacy': typeof SettingsPrivacyRoute
+  '/settings/memory': typeof SettingsMemoryRoute
+  '/settings/personas': typeof SettingsPersonasRoute
   '/settings/shortcuts': typeof SettingsShortcutsRoute
   '/settings/web-search': typeof SettingsWebSearchRoute
   '/threads/$threadId': typeof ThreadsThreadIdRoute
+  '/characters': typeof CharactersIndexRoute
   '/hub': typeof HubIndexRoute
   '/settings/providers/$providerName': typeof SettingsProvidersProviderNameRoute
   '/settings/providers': typeof SettingsProvidersIndexRoute
@@ -205,11 +261,15 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/logs': typeof LogsRoute
   '/system-monitor': typeof SystemMonitorRoute
+  '/characters/$characterId': typeof CharactersCharacterIdRoute
   '/hub/$modelId': typeof HubModelIdRoute
+  '/hub/characters': typeof HubCharactersRoute
+  '/hub/lorebooks': typeof HubLorebooksRoute
   '/local-api-server/logs': typeof LocalApiServerLogsRoute
+  '/lorebooks/$lorebookId': typeof LorebooksLorebookIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
-  '/settings/assistant': typeof SettingsAssistantRoute
   '/settings/attachments': typeof SettingsAttachmentsRoute
+  '/settings/characters': typeof SettingsCharactersRoute
   '/settings/claude-code': typeof SettingsClaudeCodeRoute
   '/settings/extensions': typeof SettingsExtensionsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -217,11 +277,14 @@ export interface FileRoutesById {
   '/settings/https-proxy': typeof SettingsHttpsProxyRoute
   '/settings/interface': typeof SettingsInterfaceRoute
   '/settings/local-api-server': typeof SettingsLocalApiServerRoute
+  '/settings/lorebooks': typeof SettingsLorebooksRoute
   '/settings/mcp-servers': typeof SettingsMcpServersRoute
-  '/settings/privacy': typeof SettingsPrivacyRoute
+  '/settings/memory': typeof SettingsMemoryRoute
+  '/settings/personas': typeof SettingsPersonasRoute
   '/settings/shortcuts': typeof SettingsShortcutsRoute
   '/settings/web-search': typeof SettingsWebSearchRoute
   '/threads/$threadId': typeof ThreadsThreadIdRoute
+  '/characters/': typeof CharactersIndexRoute
   '/hub/': typeof HubIndexRoute
   '/settings/providers/$providerName': typeof SettingsProvidersProviderNameRoute
   '/settings/providers/': typeof SettingsProvidersIndexRoute
@@ -232,11 +295,15 @@ export interface FileRouteTypes {
     | '/'
     | '/logs'
     | '/system-monitor'
+    | '/characters/$characterId'
     | '/hub/$modelId'
+    | '/hub/characters'
+    | '/hub/lorebooks'
     | '/local-api-server/logs'
+    | '/lorebooks/$lorebookId'
     | '/project/$projectId'
-    | '/settings/assistant'
     | '/settings/attachments'
+    | '/settings/characters'
     | '/settings/claude-code'
     | '/settings/extensions'
     | '/settings/general'
@@ -244,11 +311,14 @@ export interface FileRouteTypes {
     | '/settings/https-proxy'
     | '/settings/interface'
     | '/settings/local-api-server'
+    | '/settings/lorebooks'
     | '/settings/mcp-servers'
-    | '/settings/privacy'
+    | '/settings/memory'
+    | '/settings/personas'
     | '/settings/shortcuts'
     | '/settings/web-search'
     | '/threads/$threadId'
+    | '/characters/'
     | '/hub/'
     | '/settings/providers/$providerName'
     | '/settings/providers/'
@@ -257,11 +327,15 @@ export interface FileRouteTypes {
     | '/'
     | '/logs'
     | '/system-monitor'
+    | '/characters/$characterId'
     | '/hub/$modelId'
+    | '/hub/characters'
+    | '/hub/lorebooks'
     | '/local-api-server/logs'
+    | '/lorebooks/$lorebookId'
     | '/project/$projectId'
-    | '/settings/assistant'
     | '/settings/attachments'
+    | '/settings/characters'
     | '/settings/claude-code'
     | '/settings/extensions'
     | '/settings/general'
@@ -269,11 +343,14 @@ export interface FileRouteTypes {
     | '/settings/https-proxy'
     | '/settings/interface'
     | '/settings/local-api-server'
+    | '/settings/lorebooks'
     | '/settings/mcp-servers'
-    | '/settings/privacy'
+    | '/settings/memory'
+    | '/settings/personas'
     | '/settings/shortcuts'
     | '/settings/web-search'
     | '/threads/$threadId'
+    | '/characters'
     | '/hub'
     | '/settings/providers/$providerName'
     | '/settings/providers'
@@ -282,11 +359,15 @@ export interface FileRouteTypes {
     | '/'
     | '/logs'
     | '/system-monitor'
+    | '/characters/$characterId'
     | '/hub/$modelId'
+    | '/hub/characters'
+    | '/hub/lorebooks'
     | '/local-api-server/logs'
+    | '/lorebooks/$lorebookId'
     | '/project/$projectId'
-    | '/settings/assistant'
     | '/settings/attachments'
+    | '/settings/characters'
     | '/settings/claude-code'
     | '/settings/extensions'
     | '/settings/general'
@@ -294,11 +375,14 @@ export interface FileRouteTypes {
     | '/settings/https-proxy'
     | '/settings/interface'
     | '/settings/local-api-server'
+    | '/settings/lorebooks'
     | '/settings/mcp-servers'
-    | '/settings/privacy'
+    | '/settings/memory'
+    | '/settings/personas'
     | '/settings/shortcuts'
     | '/settings/web-search'
     | '/threads/$threadId'
+    | '/characters/'
     | '/hub/'
     | '/settings/providers/$providerName'
     | '/settings/providers/'
@@ -308,11 +392,15 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LogsRoute: typeof LogsRoute
   SystemMonitorRoute: typeof SystemMonitorRoute
+  CharactersCharacterIdRoute: typeof CharactersCharacterIdRoute
   HubModelIdRoute: typeof HubModelIdRoute
+  HubCharactersRoute: typeof HubCharactersRoute
+  HubLorebooksRoute: typeof HubLorebooksRoute
   LocalApiServerLogsRoute: typeof LocalApiServerLogsRoute
+  LorebooksLorebookIdRoute: typeof LorebooksLorebookIdRoute
   ProjectProjectIdRoute: typeof ProjectProjectIdRoute
-  SettingsAssistantRoute: typeof SettingsAssistantRoute
   SettingsAttachmentsRoute: typeof SettingsAttachmentsRoute
+  SettingsCharactersRoute: typeof SettingsCharactersRoute
   SettingsClaudeCodeRoute: typeof SettingsClaudeCodeRoute
   SettingsExtensionsRoute: typeof SettingsExtensionsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
@@ -320,11 +408,14 @@ export interface RootRouteChildren {
   SettingsHttpsProxyRoute: typeof SettingsHttpsProxyRoute
   SettingsInterfaceRoute: typeof SettingsInterfaceRoute
   SettingsLocalApiServerRoute: typeof SettingsLocalApiServerRoute
+  SettingsLorebooksRoute: typeof SettingsLorebooksRoute
   SettingsMcpServersRoute: typeof SettingsMcpServersRoute
-  SettingsPrivacyRoute: typeof SettingsPrivacyRoute
+  SettingsMemoryRoute: typeof SettingsMemoryRoute
+  SettingsPersonasRoute: typeof SettingsPersonasRoute
   SettingsShortcutsRoute: typeof SettingsShortcutsRoute
   SettingsWebSearchRoute: typeof SettingsWebSearchRoute
   ThreadsThreadIdRoute: typeof ThreadsThreadIdRoute
+  CharactersIndexRoute: typeof CharactersIndexRoute
   HubIndexRoute: typeof HubIndexRoute
   SettingsProvidersProviderNameRoute: typeof SettingsProvidersProviderNameRoute
   SettingsProvidersIndexRoute: typeof SettingsProvidersIndexRoute
@@ -360,6 +451,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HubIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/characters/': {
+      id: '/characters/'
+      path: '/characters'
+      fullPath: '/characters/'
+      preLoaderRoute: typeof CharactersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/threads/$threadId': {
       id: '/threads/$threadId'
       path: '/threads/$threadId'
@@ -381,11 +479,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsShortcutsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings/privacy': {
-      id: '/settings/privacy'
-      path: '/settings/privacy'
-      fullPath: '/settings/privacy'
-      preLoaderRoute: typeof SettingsPrivacyRouteImport
+    '/settings/personas': {
+      id: '/settings/personas'
+      path: '/settings/personas'
+      fullPath: '/settings/personas'
+      preLoaderRoute: typeof SettingsPersonasRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/memory': {
+      id: '/settings/memory'
+      path: '/settings/memory'
+      fullPath: '/settings/memory'
+      preLoaderRoute: typeof SettingsMemoryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/mcp-servers': {
@@ -393,6 +498,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/mcp-servers'
       fullPath: '/settings/mcp-servers'
       preLoaderRoute: typeof SettingsMcpServersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/lorebooks': {
+      id: '/settings/lorebooks'
+      path: '/settings/lorebooks'
+      fullPath: '/settings/lorebooks'
+      preLoaderRoute: typeof SettingsLorebooksRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/local-api-server': {
@@ -444,18 +556,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsClaudeCodeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/characters': {
+      id: '/settings/characters'
+      path: '/settings/characters'
+      fullPath: '/settings/characters'
+      preLoaderRoute: typeof SettingsCharactersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings/attachments': {
       id: '/settings/attachments'
       path: '/settings/attachments'
       fullPath: '/settings/attachments'
       preLoaderRoute: typeof SettingsAttachmentsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings/assistant': {
-      id: '/settings/assistant'
-      path: '/settings/assistant'
-      fullPath: '/settings/assistant'
-      preLoaderRoute: typeof SettingsAssistantRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/project/$projectId': {
@@ -465,6 +577,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/lorebooks/$lorebookId': {
+      id: '/lorebooks/$lorebookId'
+      path: '/lorebooks/$lorebookId'
+      fullPath: '/lorebooks/$lorebookId'
+      preLoaderRoute: typeof LorebooksLorebookIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/local-api-server/logs': {
       id: '/local-api-server/logs'
       path: '/local-api-server/logs'
@@ -472,11 +591,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LocalApiServerLogsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/hub/lorebooks': {
+      id: '/hub/lorebooks'
+      path: '/hub/lorebooks'
+      fullPath: '/hub/lorebooks'
+      preLoaderRoute: typeof HubLorebooksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/hub/characters': {
+      id: '/hub/characters'
+      path: '/hub/characters'
+      fullPath: '/hub/characters'
+      preLoaderRoute: typeof HubCharactersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/hub/$modelId': {
       id: '/hub/$modelId'
       path: '/hub/$modelId'
       fullPath: '/hub/$modelId'
       preLoaderRoute: typeof HubModelIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/characters/$characterId': {
+      id: '/characters/$characterId'
+      path: '/characters/$characterId'
+      fullPath: '/characters/$characterId'
+      preLoaderRoute: typeof CharactersCharacterIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/providers/': {
@@ -500,11 +640,15 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LogsRoute: LogsRoute,
   SystemMonitorRoute: SystemMonitorRoute,
+  CharactersCharacterIdRoute: CharactersCharacterIdRoute,
   HubModelIdRoute: HubModelIdRoute,
+  HubCharactersRoute: HubCharactersRoute,
+  HubLorebooksRoute: HubLorebooksRoute,
   LocalApiServerLogsRoute: LocalApiServerLogsRoute,
+  LorebooksLorebookIdRoute: LorebooksLorebookIdRoute,
   ProjectProjectIdRoute: ProjectProjectIdRoute,
-  SettingsAssistantRoute: SettingsAssistantRoute,
   SettingsAttachmentsRoute: SettingsAttachmentsRoute,
+  SettingsCharactersRoute: SettingsCharactersRoute,
   SettingsClaudeCodeRoute: SettingsClaudeCodeRoute,
   SettingsExtensionsRoute: SettingsExtensionsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
@@ -512,11 +656,14 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsHttpsProxyRoute: SettingsHttpsProxyRoute,
   SettingsInterfaceRoute: SettingsInterfaceRoute,
   SettingsLocalApiServerRoute: SettingsLocalApiServerRoute,
+  SettingsLorebooksRoute: SettingsLorebooksRoute,
   SettingsMcpServersRoute: SettingsMcpServersRoute,
-  SettingsPrivacyRoute: SettingsPrivacyRoute,
+  SettingsMemoryRoute: SettingsMemoryRoute,
+  SettingsPersonasRoute: SettingsPersonasRoute,
   SettingsShortcutsRoute: SettingsShortcutsRoute,
   SettingsWebSearchRoute: SettingsWebSearchRoute,
   ThreadsThreadIdRoute: ThreadsThreadIdRoute,
+  CharactersIndexRoute: CharactersIndexRoute,
   HubIndexRoute: HubIndexRoute,
   SettingsProvidersProviderNameRoute: SettingsProvidersProviderNameRoute,
   SettingsProvidersIndexRoute: SettingsProvidersIndexRoute,

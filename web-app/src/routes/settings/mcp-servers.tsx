@@ -427,17 +427,17 @@ function MCPServersDesktop() {
 
   return (
     <Fragment>
-      <div className="flex flex-col h-svh w-full">
-        <HeaderPage>
+      <div className="flex flex-col h-full w-full">
+        <HeaderPage className="h-auto pt-[calc(var(--spacing)*1.7)] pb-[calc(var(--spacing)*2.5)]">
           <div className={cn("flex items-center justify-between w-full mr-2 pr-3", !IS_MACOS && "pr-30")}>
             <span className='font-medium text-base font-studio'>{t('common:settings')}</span>
-            <Button variant="outline" size="sm" onClick={() => handleOpenDialog()} className="relative z-50">
+            <Button variant="outline" size="sm" onClick={() => handleOpenDialog()} className="relative z-50 -my-1">
               <IconPlus size={18} className="text-muted-foreground" />
               {t('mcp-servers:addServer')}
             </Button>
           </div>
         </HeaderPage>
-        <div className="flex h-[calc(100%-60px)]">
+        <div className="flex flex-1 min-h-0">
           <SettingsMenu />
           <div className="p-4 pt-0 w-full overflow-y-auto">
             <div className="flex flex-col justify-between gap-4 gap-y-3 w-full">

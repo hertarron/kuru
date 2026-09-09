@@ -455,67 +455,6 @@ describe('llamacpp_extension', () => {
     })
   })
 
-  describe('migrateFitOff', () => {
-    beforeEach(() => {
-      vi.mocked(getBackendSetting).mockResolvedValue(null)
-    })
-
-    it('should skip migration if already migrated', async () => {
-      vi.mocked(getBackendSetting).mockResolvedValue('1')
-      extension['config'] = { fit: true } as any
-      extension['getSettings'] = vi.fn()
-
-      await extension['migrateFitOff']()
-
-      expect(extension['getSettings']).not.toHaveBeenCalled()
-    })
-
-    it('should set migration key without calling updateSettings when fit is already false', async () => {
-      extension['config'] = { fit: false } as any
-      extension['getSettings'] = vi.fn()
-      extension['updateSettings'] = vi.fn()
-
-      await extension['migrateFitOff']()
-
-      expect(extension['getSettings']).not.toHaveBeenCalled()
-      expect(extension['updateSettings']).not.toHaveBeenCalled()
-      expect(setBackendSetting).toHaveBeenCalledWith('llamacpp_fit_off_v1', '1')
-    })
-
-    it('should disable fit when it is true', async () => {
-      extension['config'] = { fit: true } as any
-      extension['getSettings'] = vi.fn().mockResolvedValue([
-        { key: 'fit', controllerProps: { value: true } },
-        { key: 'ctx_size', controllerProps: { value: 2048 } },
-      ])
-      extension['updateSettings'] = vi.fn().mockResolvedValue(undefined)
-
-      await extension['migrateFitOff']()
-
-      const updatedSettings = vi.mocked(extension['updateSettings']).mock.calls[0][0]
-      expect(updatedSettings.find((s: any) => s.key === 'fit').controllerProps.value).toBe(false)
-      expect(updatedSettings.find((s: any) => s.key === 'ctx_size').controllerProps.value).toBe(2048)
-      expect(extension['config'].fit).toBe(false)
-      expect(setBackendSetting).toHaveBeenCalledWith('llamacpp_fit_off_v1', '1')
-    })
-
-    it('should not modify other settings during fit migration', async () => {
-      extension['config'] = { fit: true } as any
-      extension['getSettings'] = vi.fn().mockResolvedValue([
-        { key: 'fit', controllerProps: { value: true } },
-        { key: 'fit_target', controllerProps: { value: '1024' } },
-        { key: 'fit_ctx', controllerProps: { value: '' } },
-      ])
-      extension['updateSettings'] = vi.fn().mockResolvedValue(undefined)
-
-      await extension['migrateFitOff']()
-
-      const updatedSettings = vi.mocked(extension['updateSettings']).mock.calls[0][0]
-      expect(updatedSettings.find((s: any) => s.key === 'fit_target').controllerProps.value).toBe('1024')
-      expect(updatedSettings.find((s: any) => s.key === 'fit_ctx').controllerProps.value).toBe('')
-    })
-  })
-
   describe('getLoadedModels', () => {
     it('should return list of loaded models', async () => {
       const { invoke } = await import('@tauri-apps/api/core')
@@ -2184,5 +2123,62 @@ describe('first-run provisioning gate', () => {
 
     vi.mocked(getBackendSetting).mockResolvedValue(null)
     expect(await extension['hasSetupConsent']()).toBe(false)
+  })
+})
+
+describe('model.yml reconciliation', () => {
+  it('removes a yaml key the sidebar says is off', async () => {
+    // `no_kv_offload: true` survived in model.yml while the sidebar checkbox
+    // read false, so every load ran with `--no-kv-offload` and put the whole
+    // KV cache in RAM while the planner budgeted it onto the cards.
+    const { joinPath, fs } = await import('@janhq/core')
+    const { invoke } = await import('@tauri-apps/api/core')
+    const extension = new llamacpp_extension()
+    extension['providerPath'] = '/jan/llamacpp'
+
+    vi.mocked(joinPath).mockImplementation((paths) =>
+      Promise.resolve(paths.join('/'))
+    )
+    vi.mocked(fs.existsSync).mockResolvedValue(true)
+    vi.mocked(getBackendSetting).mockImplementation(async (key: string) =>
+      key === 'model-provider'
+        ? JSON.stringify({
+            state: {
+              providers: [
+                {
+                  provider: 'llamacpp',
+                  models: [
+                    {
+                      id: 'm1',
+                      settings: {
+                        no_kv_offload: { controller_props: { value: false } },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          })
+        : null
+    )
+    vi.mocked(setBackendSetting).mockResolvedValue(undefined)
+
+    let written: Record<string, unknown> | undefined
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args: never) => {
+      if (cmd === 'read_yaml') {
+        return { model_path: '/m.gguf', no_kv_offload: true, ctx_size: 21000 }
+      }
+      if (cmd === 'write_yaml') {
+        written = (args as { data: Record<string, unknown> }).data
+      }
+      return undefined
+    })
+
+    await extension['migratePersistedModelSettingsToYaml']()
+
+    expect(written).toBeDefined()
+    expect(written).not.toHaveProperty('no_kv_offload')
+    // Keys the sidebar does not own are left alone.
+    expect(written).toMatchObject({ model_path: '/m.gguf', ctx_size: 21000 })
   })
 })

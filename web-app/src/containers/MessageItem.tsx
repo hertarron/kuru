@@ -1,8 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { memo, useState, useCallback, useEffect, useMemo } from 'react'
+import { memo, useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import type { UIMessage, ChatStatus } from 'ai'
 import { RenderMarkdown } from './RenderMarkdown'
 import { cn } from '@/lib/utils'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { ChainOfThoughtGroup } from './message/ChainOfThoughtGroup'
 import {
   CHAT_STATUS,
@@ -23,6 +28,8 @@ import {
   IconAlertTriangle,
   IconChevronLeft,
   IconChevronRight,
+  IconGitFork,
+  IconUserCircle,
 } from '@tabler/icons-react'
 import { EditMessageDialog } from '@/containers/dialogs/EditMessageDialog'
 import { DeleteMessageDialog } from '@/containers/dialogs/DeleteMessageDialog'
@@ -51,11 +58,19 @@ export type MessageItemProps = {
   onRegenerate?: (messageId: string) => void
   onContinue?: (messageId: string) => void
   onEdit?: (messageId: string, newText: string) => void
+  /** Duplicate this assistant reply as a new childless version. */
+  onFork?: (messageId: string) => void
   onDelete?: (messageId: string) => void
   versionInfo?: { index: number; count: number }
   onSwitchVersion?: (messageId: string, dir: -1 | 1) => void
   isAnimating?: boolean
   hideActions?: boolean
+  /** Character portrait, shown above and left of an assistant row. */
+  charAvatarUrl?: string
+  /** Persona portrait, shown above and right of a user row. */
+  userAvatarUrl?: string
+  /** Coding characters: no persona in the scene, no user portrait at all. */
+  userAvatarHidden?: boolean
 }
 
 export const MessageItem = memo(
@@ -73,9 +88,13 @@ export const MessageItem = memo(
     onRegenerate,
     onContinue,
     onEdit,
+    onFork,
     onDelete,
     versionInfo,
     onSwitchVersion,
+    charAvatarUrl,
+    userAvatarUrl,
+    userAvatarHidden,
   }: MessageItemProps) => {
     const { t } = useTranslation()
     const selectedModel = useModelProvider((state) => state.selectedModel)
@@ -87,7 +106,21 @@ export const MessageItem = memo(
       url: string
       filename?: string
     } | null>(null)
-
+    // Survives the close: the dialog's exit animation needs the <img> still
+    // mounted while it zooms out, but previewImage is already null by then.
+    const lastPreviewUrlRef = useRef(previewImage?.url)
+    if (previewImage) lastPreviewUrlRef.current = previewImage.url
+    // One Radix dialog per message would mean hundreds in a long chat, so the
+    // zoom popup only enters the tree once this message's image is clicked.
+    // It stays after that -- unmounting it would cut the exit animation.
+    const [previewMounted, setPreviewMounted] = useState(false)
+    const openPreview = useCallback(
+      (image: { url: string; filename?: string }) => {
+        setPreviewMounted(true)
+        setPreviewImage(image)
+      },
+      []
+    )
 
     const handleRegenerate = useCallback(() => {
       onRegenerate?.(message.id)
@@ -98,6 +131,44 @@ export const MessageItem = memo(
     }, [onContinue, message.id])
 
     const isStopped = metadata?.stopped === true
+
+    /** Portrait above the message. It sits in the flow and reserves its own
+        height, so the size is free to change without retuning the margins
+        between messages. The user's runs 20% smaller than the character's. */
+    const charAvatarSize = 'size-24 rounded-xl'
+    const userAvatarSize = 'size-[69px] rounded-xl'
+    // Which portrait this row actually draws. The spacing below reads these,
+    // so a row can never reserve height for a portrait it does not render.
+    const showCharPortrait = message.role === 'assistant' && !!charAvatarUrl
+    const showUserPortrait = message.role === 'user' && !userAvatarHidden
+    const avatarImg = (
+      url: string | undefined,
+      size: string,
+      extra?: string
+    ) =>
+      url ? (
+        <img
+          src={url}
+          alt=""
+          className={cn(
+            size,
+            'object-cover border cursor-zoom-in shrink-0',
+            extra
+          )}
+          onClick={() => openPreview({ url })}
+        />
+      ) : null
+    const userPlaceholder = (extra?: string) => (
+      <div
+        className={cn(
+          userAvatarSize,
+          'border bg-secondary/40 flex items-center justify-center shrink-0',
+          extra
+        )}
+      >
+        <IconUserCircle size={46} className="text-muted-foreground" />
+      </div>
+    )
 
     const handleEdit = useCallback(
       (newText: string) => {
@@ -383,7 +454,7 @@ export const MessageItem = memo(
                   alt={part.filename || 'Uploaded attachment'}
                   className="size-20 rounded-lg object-cover border cursor-pointer"
                   onClick={() =>
-                    setPreviewImage({ url: part.url!, filename: part.filename })
+                    openPreview({ url: part.url!, filename: part.filename })
                   }
                 />
               </div>
@@ -400,7 +471,7 @@ export const MessageItem = memo(
               alt={part.filename || 'Generated image'}
               className="max-w-full rounded-md cursor-pointer"
               onClick={() =>
-                setPreviewImage({ url: part.url!, filename: part.filename })
+                openPreview({ url: part.url!, filename: part.filename })
               }
             />
           </div>
@@ -474,13 +545,20 @@ export const MessageItem = memo(
       citationOffsets,
     ])
 
+    // Version switching rebuilds the rendered path from the store; doing it
+    // mid-generation would clobber the in-flight stream, so the control stays
+    // visible but inert while the thread is busy.
+    const isThreadBusy =
+      status === CHAT_STATUS.STREAMING || status === CHAT_STATUS.SUBMITTED
     const versionNav =
-      versionInfo && versionInfo.count > 1 && onSwitchVersion ? (
+      versionInfo &&
+      versionInfo.count > 1 &&
+      onSwitchVersion ? (
         <div className="flex items-center gap-0.5 text-muted-foreground">
           <button
             type="button"
-            className="hover:text-foreground disabled:opacity-40"
-            disabled={versionInfo.index <= 1}
+            className="hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            disabled={isThreadBusy || versionInfo.index <= 1}
             onClick={() => onSwitchVersion(message.id, -1)}
             title="Previous version"
           >
@@ -491,8 +569,8 @@ export const MessageItem = memo(
           </span>
           <button
             type="button"
-            className="hover:text-foreground disabled:opacity-40"
-            disabled={versionInfo.index >= versionInfo.count}
+            className="hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            disabled={isThreadBusy || versionInfo.index >= versionInfo.count}
             onClick={() => onSwitchVersion(message.id, 1)}
             title="Next version"
           >
@@ -504,10 +582,30 @@ export const MessageItem = memo(
     return (
       <div
         className={cn(
-          'w-full mb-4 group/message',
-          message.role === 'user' && !isFirstMessage && 'mt-8'
+          'w-full mb-4 group/message relative',
+          // Jan's rhythm for a portrait-less chat. A portrait brings its own
+          // vertical space, so the two must not stack.
+          message.role === 'user' &&
+            !isFirstMessage &&
+            !showUserPortrait &&
+            'mt-8'
         )}
       >
+        {/* In the flow, so it reserves its own height. Hanging in the margin
+            only worked on the character's side: assistant markdown is full
+            width, so the persona portrait landed on its last line. */}
+        {showCharPortrait && (
+          <div className="mb-1 flex justify-start">
+            {avatarImg(charAvatarUrl, charAvatarSize)}
+          </div>
+        )}
+        {showUserPortrait && (
+          <div className="mb-2 flex justify-end">
+            {userAvatarUrl
+              ? avatarImg(userAvatarUrl, userAvatarSize)
+              : userPlaceholder()}
+          </div>
+        )}
 
         {/* Render message parts */}
         {renderedParts}
@@ -574,7 +672,10 @@ export const MessageItem = memo(
 
             {onDelete && status !== CHAT_STATUS.STREAMING &&
               status !== CHAT_STATUS.SUBMITTED && (
-              <DeleteMessageDialog onDelete={handleDelete} />
+              <DeleteMessageDialog
+                onDelete={handleDelete}
+                deletesReply={message.role === 'user'}
+              />
             )}
           </div>
         )}
@@ -587,13 +688,14 @@ export const MessageItem = memo(
                   {formatDate(createdAt)}
                 </span>
               )}
-              <div
-                className={cn(
-                  'flex items-center gap-1',
-                  (isStreaming || hideActions) && 'hidden'
-                )}
-              >
+              <div className="flex items-center gap-1">
                 {versionNav}
+                <div
+                  className={cn(
+                    'flex items-center gap-1',
+                    (isStreaming || hideActions) && 'hidden'
+                  )}
+                >
                 <CopyButton text={getFullTextContent()} />
 
                 {onEdit && !isStreaming && (
@@ -601,6 +703,17 @@ export const MessageItem = memo(
                     message={getFullTextContent()}
                     onSave={handleEdit}
                   />
+                )}
+
+                {onFork && !isStreaming && (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => onFork(message.id)}
+                    title={t('chat:actions.fork')}
+                  >
+                    <IconGitFork size={16} />
+                  </Button>
                 )}
 
                 {onDelete && !isStreaming && (
@@ -632,6 +745,7 @@ export const MessageItem = memo(
                     <IconRefresh size={16} />
                   </Button>
                 )}
+                </div>
               </div>
 
               <TokenSpeedIndicator
@@ -641,19 +755,32 @@ export const MessageItem = memo(
             </div>
           )}
 
-        {/* Image Preview Dialog */}
-        {previewImage && (
-          <div
-            className="fixed inset-0 z-100 bg-black/50 backdrop-blur-md flex items-center justify-center cursor-pointer"
-            onClick={() => setPreviewImage(null)}
+        {/* Image Preview Dialog -- the same zoom popup the hub sheets use:
+            fade+zoom animation, click outside or on the image to dismiss. The
+            dialog portals itself, so the message list's top-edge fade mask
+            can't clip it. */}
+        {previewMounted && (
+          <Dialog
+            open={!!previewImage}
+            onOpenChange={(open) => !open && setPreviewImage(null)}
           >
-            <img
-              src={previewImage.url}
-              alt={previewImage.filename || 'Preview'}
-              className="max-h-[90vh] max-w-[90vw] object-contain"
-              onClick={(e) => e.stopPropagation()}
-            />
-          </div>
+            <DialogContent
+              showCloseButton={false}
+              className="w-auto max-w-[90vw] max-h-[90vh] p-0 gap-0 overflow-hidden bg-transparent border-0 shadow-none"
+            >
+              <DialogTitle className="sr-only">
+                {previewImage?.filename || 'Image'}
+              </DialogTitle>
+              {lastPreviewUrlRef.current && (
+                <img
+                  src={lastPreviewUrlRef.current}
+                  alt={previewImage?.filename || 'Preview'}
+                  onClick={() => setPreviewImage(null)}
+                  className="block max-w-full max-h-[85vh] object-contain rounded-lg cursor-zoom-out"
+                />
+              )}
+            </DialogContent>
+          </Dialog>
         )}
       </div>
     )
@@ -674,6 +801,9 @@ export const MessageItem = memo(
       prevProps.isLastMessage === nextProps.isLastMessage &&
       prevProps.status === nextProps.status &&
       prevProps.hideActions === nextProps.hideActions &&
+      prevProps.charAvatarUrl === nextProps.charAvatarUrl &&
+      prevProps.userAvatarUrl === nextProps.userAvatarUrl &&
+      prevProps.userAvatarHidden === nextProps.userAvatarHidden &&
       prevProps.versionInfo?.index === nextProps.versionInfo?.index &&
       prevProps.versionInfo?.count === nextProps.versionInfo?.count
     )

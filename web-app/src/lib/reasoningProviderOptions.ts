@@ -18,16 +18,17 @@ const LEVEL_TO_OPENAI_EFFORT: Partial<Record<ThinkingBudgetLevelKey, string>> = 
 
 // The AI SDK adds budget_tokens on top of max_tokens, so these are safe caps
 // regardless of the request's output limit (Anthropic minimum is 1024).
+// Halved from the old values to match the RP-calibrated level ratios below.
 const ANTHROPIC_LEVEL_BUDGET_TOKENS: Record<
   Exclude<ThinkingBudgetLevelKey, 'unlimited'>,
   number
 > = {
-  low: 4096,
-  medium: 8192,
-  high: 16384,
-  xhigh: 32768,
+  low: 2048,
+  medium: 4096,
+  high: 8192,
+  xhigh: 16384,
 }
-const DEFAULT_ANTHROPIC_BUDGET_TOKENS = 8192
+const DEFAULT_ANTHROPIC_BUDGET_TOKENS = 4096
 
 function readReasoning(model: Model | null | undefined): ReasoningChoice {
   const v = model?.settings?.reasoning?.controller_props?.value

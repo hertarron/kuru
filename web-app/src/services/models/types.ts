@@ -3,6 +3,7 @@
  */
 
 import { SessionInfo, modelInfo, ThreadMessage, UnloadResult } from '@janhq/core'
+import type { CalibrationReport } from '@/hooks/useModelCalibration'
 import { Model as CoreModel } from '@janhq/core'
 
 // Types for model catalog
@@ -84,11 +85,8 @@ export interface HuggingFaceRepo {
   readme?: string
 }
 
-export interface GgufMetadata {
-  version: number
-  tensor_count: number
-  metadata: Record<string, string>
-}
+export type { GgufMetadata } from '@janhq/tauri-plugin-llamacpp-api'
+import type { GgufMetadata } from '@janhq/tauri-plugin-llamacpp-api'
 
 export interface ModelValidationResult {
   isValid: boolean
@@ -138,6 +136,14 @@ export interface ModelsService {
   pauseDownload(id: string): Promise<void>
   deleteModel(id: string, provider?: string): Promise<void>
   getActiveModels(provider?: string): Promise<string[]>
+  /**
+   * Runs the engine's own capacity eviction ahead of the load, so a VRAM
+   * reading taken next describes the machine the model will load into rather
+   * than one still holding the model it replaces. True when something was
+   * actually unloaded, meaning the reading needs time to settle. False when
+   * the engine cannot do this.
+   */
+  evictForLoad(model: string, provider?: string): Promise<boolean>
   stopModel(model: string, provider?: string): Promise<UnloadResult | undefined>
   stopAllModels(): Promise<void>
   startModel(
@@ -150,6 +156,20 @@ export interface ModelsService {
     model: string
   ): Promise<SessionInfo | undefined>
   isToolSupported(modelId: string): Promise<boolean>
+  /** GGUF header of an installed model, for the context planner. */
+  readModelGguf(modelId: string): Promise<GgufMetadata | undefined>
+  /**
+   * Load the model once and report what llama.cpp allocated, so the planner
+   * can stop reserving the conservative compute-buffer fallback for it.
+   * Undefined when the engine cannot run a probe.
+   */
+  calibrateModel(modelId: string): Promise<CalibrationReport | undefined>
+  /**
+   * Stops a running fit-test probe, if any, so a stuck measurement releases
+   * memory immediately instead of hanging until the probe timeout. True when
+   * a probe was actually running.
+   */
+  cancelCalibrateModel(): Promise<boolean>
   checkMmprojExistsAndUpdateOffloadMMprojSetting(
     modelId: string,
     updateProvider?: (
@@ -159,6 +179,20 @@ export interface ModelsService {
     getProviderByName?: (providerName: string) => ModelProvider | undefined
   ): Promise<{ exists: boolean; settingsUpdated: boolean }>
   checkMmprojExists(modelId: string): Promise<boolean>
+  /**
+   * Sizes model.yml folds into `size_bytes` that the GGUF header does not
+   * cover: the vision projector and the MTP draft model, plus the MTP toggle
+   * itself and the draft header for its KV cache. The context planner budgets
+   * them beside the shape. Zeros when the engine cannot report them; every
+   * caller treats that as text-only.
+   */
+  getModelExtraSizes(modelId: string): Promise<{
+    mmprojBytes: number
+    mtp: boolean
+    mtpModelPath?: string
+    mtpDraftBytes: number
+    mtpDraftHeader?: GgufMetadata
+  } | undefined>
   getMtpInfo(modelId: string): Promise<{
     mtp_layers: number
     mtp: boolean

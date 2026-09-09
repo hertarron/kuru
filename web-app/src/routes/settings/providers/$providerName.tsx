@@ -3,6 +3,12 @@ import { Card, CardItem } from '@/containers/Card'
 import HeaderPage from '@/containers/HeaderPage'
 import SettingsMenu from '@/containers/SettingsMenu'
 import { useModelProvider } from '@/hooks/useModelProvider'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import { RopeScalingControl } from '@/containers/RopeScalingControl'
 import { cn, getProviderTitle, getModelDisplayName, isLocalProvider } from '@/lib/utils'
 import { createFileRoute, Link, useParams } from '@tanstack/react-router'
 import { useTranslation } from '@/i18n/react-i18next-compat'
@@ -24,6 +30,7 @@ import { Button } from '@/components/ui/button'
 import { SecretInput } from '@/components/ui/secret-input'
 import { Switch } from '@/components/ui/switch'
 import {
+  IconChevronRight,
   IconCircleCheck,
   IconCircle,
   IconFolderPlus,
@@ -65,6 +72,176 @@ export const Route = createFileRoute('/settings/providers/$providerName')({
   },
 })
 
+/**
+ * Curated llama.cpp globals, in display order. Everything the context
+ * planner reads (placement, context, batch, cache type) lives per model and
+ * stays out of here; context shift and its companion stay legacy-only.
+ */
+const KURU_ADVANCED_KEYS = [
+  'models_max',
+  'threads',
+  'threads_batch',
+  'parallel',
+  'n_predict',
+  'cont_batching',
+  'no_mmap',
+  'mlock',
+  'kv_unified',
+  'cache_ram',
+  'cache_reuse',
+  'swa_full',
+]
+
+/**
+ * Shown inline in Kuru mode: engine setup. Everything else is either curated
+ * into Advanced below, legacy-only, or owns a custom section. Unknown future
+ * keys land in Advanced, never here, so they stay visible but tucked away.
+ */
+const KURU_BASIC_KEYS = new Set([
+  'llamacpp_version',
+  'llamacpp_backend',
+  'llamacpp_env',
+  'check_for_updates',
+  'auto_update_engine',
+  'verify_backend_deps',
+  'models_max',
+  'timeout',
+  'device',
+])
+
+/**
+ * Hidden with Kuru Fit on: planner-owned per-model copies, shift-related or
+ * legacy fit keys — or flash attention, which is set per model instead.
+ */
+const KURU_LEGACY_ONLY_KEYS = new Set([
+  'fit',
+  'fit_target',
+  'fit_ctx',
+  'ctx_shift',
+  'keep',
+  'main_gpu',
+  'split_mode',
+  'tensor_split',
+  'ctx_size',
+  'n_gpu_layers',
+  'ubatch_size',
+  'cache_type_k',
+  'cache_type_v',
+  'batch_size',
+  'flash_attn',
+])
+
+/** Rendered as one RoPE block instead of four raw rows. */
+const KURU_ROPE_KEYS = new Set([
+  'rope_scaling',
+  'rope_scale',
+  'rope_freq_base',
+  'rope_freq_scale',
+])
+
+/**
+ * Stock fit controls for installs whose persisted settings predate them.
+ * Titles match upstream Jan verbatim.
+ */
+const LEGACY_FIT_FALLBACKS = [
+  {
+    key: 'fit',
+    title: 'Fit (auto-adjust to device memory)',
+    description:
+      "Whether to adjust unset arguments to fit in device memory ('on' or 'off'). (env: LLAMA_ARG_FIT)",
+    controller_type: 'checkbox',
+    controller_props: { value: false },
+  },
+  {
+    key: 'fit_target',
+    title: 'Fit Target per Device (MiB)',
+    description:
+      'Target margin per device for fit, comma-separated list of MiB values. Single value is broadcast across all devices. (env: LLAMA_ARG_FIT_TARGET)',
+    controller_type: 'input',
+    controller_props: {
+      value: '1024',
+      placeholder: '1024 or MiB0,MiB1,...',
+      type: 'text',
+      textAlign: 'right',
+    },
+  },
+  {
+    key: 'fit_ctx',
+    title: 'Fit Minimum Context Size',
+    description:
+      'Minimum context size (tokens) that can be set by the auto-fit option.',
+    controller_type: 'input',
+    controller_props: {
+      value: 4096,
+      placeholder: '4096',
+      type: 'number',
+      textAlign: 'right',
+    },
+  },
+]
+
+type LlamacppSettingLike = {
+  key: string
+  title?: string
+  description?: string
+  controller_type?: string
+  controller_props?: Record<string, unknown> & { value?: unknown }
+}
+
+/**
+ * Lean settings row for the curated Advanced group (and legacy fallbacks).
+ * Unlike the stock rows above it carries no backend buttons — those attach
+ * to engine keys, which never land here.
+ */
+function LlamacppAdvancedRow({
+  setting,
+  onWrite,
+}: {
+  setting: LlamacppSettingLike
+  onWrite: (value: string | boolean | number) => void
+}) {
+  return (
+    <CardItem
+      title={setting.title}
+      column={
+        setting.controller_type === 'input' &&
+        (setting.controller_props as { type?: string } | undefined)?.type !==
+          'number'
+      }
+      description={
+        setting.description ? (
+          <RenderMarkdown
+            className="![>p]:text-muted-foreground select-none"
+            content={setting.description}
+            components={{
+              a: ({ ...props }) => (
+                <a {...props} target="_blank" rel="noopener noreferrer" />
+              ),
+              p: ({ ...props }) => <p {...props} className="mb-0!" />,
+            }}
+          />
+        ) : undefined
+      }
+      actions={
+        <div className="mt-2">
+          <DynamicControllerSetting
+            controllerType={setting.controller_type ?? 'input'}
+            controllerProps={{
+              ...setting.controller_props,
+              value: setting.controller_props?.value as
+                | string
+                | boolean
+                | number
+                | undefined,
+            }}
+            onChange={(newValue) => onWrite(newValue)}
+          />
+        </div>
+      }
+    />
+  )
+}
+
 function ProviderDetail() {
   const { t } = useTranslation()
   const serviceHub = useServiceHub()
@@ -82,6 +259,7 @@ function ProviderDetail() {
   const [baseUrlDraft, setBaseUrlDraft] = useState('')
   const [showAdvancedApiKeys, setShowAdvancedApiKeys] = useState(false)
   const [isTestingKeys, setIsTestingKeys] = useState(false)
+  const [kuruAdvancedOpen, setKuruAdvancedOpen] = useState(false)
   const [keyCheckResults, setKeyCheckResults] = useState<
     { index: number; masked: string; status: string; detail: string }[]
   >([])
@@ -167,6 +345,52 @@ function ProviderDetail() {
           setting.controller_props.value === '' ||
           !setting.controller_props.value)
     )
+
+  // Kuru Fit is opt-out: installs predating the key behave as fitted.
+  const kuruMode =
+    provider?.provider !== 'llamacpp' ||
+    provider.settings?.find((s) => s.key === 'kuru_fit')?.controller_props
+      ?.value !== false
+
+  /**
+   * Writes provider settings the same way the generic rows do below
+   * (persist + store + stop loaded models so the next load picks them up).
+   * Missing keys are created, so toggles added after install still render.
+   */
+  const persistProviderSettings = useCallback(
+    (patch: Record<string, string | boolean | number>) => {
+      if (!provider) return
+      const newSettings = [...provider.settings]
+      for (const [key, value] of Object.entries(patch)) {
+        const index = newSettings.findIndex((s) => s.key === key)
+        if (index === -1) {
+          newSettings.push({
+            key,
+            title: key,
+            description: '',
+            controller_type:
+              typeof value === 'boolean' ? 'checkbox' : 'input',
+            controller_props: { value },
+          } as (typeof newSettings)[number])
+        } else {
+          const target = newSettings[index].controller_props as {
+            value: string | boolean | number
+          }
+          target.value = value
+        }
+      }
+      serviceHub
+        .providers()
+        .updateSettings(provider.provider, newSettings)
+      updateProvider(provider.provider, { settings: newSettings })
+      serviceHub.models().stopAllModels()
+      serviceHub
+        .models()
+        .getActiveModels()
+        .then((models) => setActiveModels(models || []))
+    },
+    [provider, serviceHub, updateProvider, setActiveModels]
+  )
 
   const handleModelImportSuccess = async (importedModelName?: string) => {
     if (importedModelName) {
@@ -766,15 +990,15 @@ function ProviderDetail() {
   }, [provider, serviceHub, t, installCudaRuntime])
 
   return (
-    <div className="flex flex-col h-svh w-full">
-      <HeaderPage>
+    <div className="flex flex-col h-full w-full">
+      <HeaderPage className="h-auto pt-[calc(var(--spacing)*1.7)] pb-[calc(var(--spacing)*2.5)]">
         <div className="flex items-center gap-2 w-full">
           <span className="font-medium text-base font-studio">
             {t('common:settings')}
           </span>
         </div>
       </HeaderPage>
-      <div className="flex h-[calc(100%-60px)]">
+      <div className="flex flex-1 min-h-0">
         <SettingsMenu />
         <div className="p-4 pt-0 w-full overflow-y-auto">
           <div className="flex flex-col justify-between gap-4 gap-y-3 w-full">
@@ -830,6 +1054,23 @@ function ProviderDetail() {
                 provider?.provider !== 'llamacpp' &&
                 provider?.provider !== 'mlx'
               ) && (
+              <>
+              {isLlamacpp && (
+                <Card>
+                  <CardItem
+                    title="Kuru Fit"
+                    description="Automatically place layers and size context from measured memory on every load. Turn off to restore stock Jan fitting and show all original settings."
+                    actions={
+                      <Switch
+                        checked={kuruMode}
+                        onCheckedChange={(v) =>
+                          persistProviderSettings({ kuru_fit: v })
+                        }
+                      />
+                    }
+                  />
+                </Card>
+              )}
               <Card>
                 {provider?.settings.map((setting, settingIndex) => {
                   if (
@@ -840,9 +1081,20 @@ function ProviderDetail() {
                     return null
                   }
 
+                  // Kuru Fit owns its own section above; the legacy fit
+                  // controls only exist with it off.
                   if (
                     provider?.provider === 'llamacpp' &&
-                    setting.key === 'fit_ctx'
+                    setting.key === 'kuru_fit'
+                  ) {
+                    return null
+                  }
+
+                  if (
+                    provider?.provider === 'llamacpp' &&
+                    kuruMode &&
+                    (setting.key === 'fit_ctx' ||
+                      !KURU_BASIC_KEYS.has(setting.key))
                   ) {
                     return null
                   }
@@ -1058,8 +1310,87 @@ function ProviderDetail() {
                   )
                 })}
 
+                {isLlamacpp && kuruMode && (
+                  <Collapsible
+                    open={kuruAdvancedOpen}
+                    onOpenChange={setKuruAdvancedOpen}
+                  >
+                    <CollapsibleTrigger className="flex w-full items-center gap-2 rounded py-2 text-left font-medium hover:bg-secondary/50">
+                      <IconChevronRight
+                        size={14}
+                        className={cn(
+                          'transition-transform',
+                          kuruAdvancedOpen && 'rotate-90'
+                        )}
+                      />
+                      Advanced
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3 pt-1">
+                      <RopeScalingControl
+                        settings={provider?.settings ?? []}
+                        onWrite={(patch) =>
+                          persistProviderSettings(patch)
+                        }
+                      />
+                      {KURU_ADVANCED_KEYS.map((key) => {
+                        const setting = provider?.settings.find(
+                          (s) => s.key === key
+                        )
+                        if (!setting) return null
+                        return (
+                          <LlamacppAdvancedRow
+                            key={key}
+                            setting={setting}
+                            onWrite={(value) =>
+                              persistProviderSettings({ [key]: value })
+                            }
+                          />
+                        )
+                      })}
+                      {(provider?.settings ?? [])
+                        .filter(
+                          (s) =>
+                            !KURU_ADVANCED_KEYS.includes(s.key) &&
+                            !KURU_BASIC_KEYS.has(s.key) &&
+                            !KURU_LEGACY_ONLY_KEYS.has(s.key) &&
+                            !KURU_ROPE_KEYS.has(s.key) &&
+                            s.key !== 'kuru_fit' &&
+                            s.key !== 'fit_ctx' &&
+                            s.key !== 'device'
+                        )
+                        .map((setting) => (
+                          <LlamacppAdvancedRow
+                            key={setting.key}
+                            setting={setting}
+                            onWrite={(value) =>
+                              persistProviderSettings({
+                                [setting.key]: value,
+                              })
+                            }
+                          />
+                        ))}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+
+                {isLlamacpp &&
+                  !kuruMode &&
+                  LEGACY_FIT_FALLBACKS.filter(
+                    (fallback) =>
+                      !provider?.settings.some((s) => s.key === fallback.key)
+                  ).map((fallback) => (
+                    <LlamacppAdvancedRow
+                      key={fallback.key}
+                      setting={fallback}
+                      onWrite={(value) =>
+                        persistProviderSettings({ [fallback.key]: value })
+                      }
+                    />
+                  ))}
+
                 <DeleteProvider provider={provider} />
               </Card>
+              </>
               )}
 
               {provider &&

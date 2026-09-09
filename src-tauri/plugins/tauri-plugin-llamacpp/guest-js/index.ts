@@ -71,6 +71,7 @@ export function normalizeLlamacppConfig(config: any): LlamacppConfig {
     timeout: asI32(config.timeout, 600),
 
     llamacpp_env: asString(config.llamacpp_env),
+    kuru_fit: asBool(config.kuru_fit, true),
     fit: asBool(config.fit),
     fit_target: asString(config.fit_target),
     fit_ctx: asString(config.fit_ctx),
@@ -225,6 +226,41 @@ export async function adoptRouter(
     modelsMax,
     apiSecret,
   })
+}
+
+/**
+ * Load one model once at verbosity 5 and return the allocation lines it
+ * printed: the per-device `model`, `KV`, `RS` and `compute buffer size`
+ * figures, plus any allocation failure. The probe process is always killed
+ * before this resolves.
+ *
+ * `presetPath` must name exactly one model, with `load-on-startup = true`.
+ */
+export async function calibrateModel(
+  backendExe: string,
+  presetPath: string,
+  logPath: string,
+  port: number,
+  envs: Record<string, string>,
+  timeoutSecs?: number
+): Promise<string[]> {
+  return await invoke('plugin:llamacpp|calibrate_model', {
+    backendExe,
+    presetPath,
+    logPath,
+    port,
+    envs,
+    timeoutSecs,
+  })
+}
+
+/**
+ * Stops a running calibration probe, if any, so a fit test stuck in
+ * first-time RAM warm-up releases memory instead of hanging until the probe
+ * timeout. Resolves true when a probe was actually running.
+ */
+export async function cancelCalibrateModel(): Promise<boolean> {
+  return await invoke('plugin:llamacpp|cancel_calibrate')
 }
 
 // GGUF commands

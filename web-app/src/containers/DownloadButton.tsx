@@ -5,11 +5,7 @@ import { useGeneralSetting } from '@/hooks/useGeneralSetting'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import { useTranslation } from '@/i18n'
-import {
-  extractModelName,
-  extractQuantLabel,
-  selectDefaultQuant,
-} from '@/lib/models'
+import { extractModelName } from '@/lib/models'
 import { toast } from 'sonner'
 import { cn, sanitizeModelId } from '@/lib/utils'
 import { pickMtpSibling } from '@/lib/mtp'
@@ -17,7 +13,7 @@ import { CatalogModel } from '@/services/models/types'
 import { DownloadEvent, DownloadState, events } from '@janhq/core'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
-import { DEFAULT_MODEL_QUANTIZATIONS } from '@/constants/models'
+import { useRecommendedQuant } from '@/hooks/useRecommendedQuant'
 
 type ModelProps = {
   model: CatalogModel
@@ -51,7 +47,9 @@ export function DownloadButtonPlaceholder({
   const huggingfaceToken = useGeneralSetting((state) => state.huggingfaceToken)
   const [isDownloaded, setDownloaded] = useState<boolean>(false)
 
-  const quant = selectDefaultQuant(model.quants, DEFAULT_MODEL_QUANTIZATIONS)
+  // The card downloads without asking which quant, so it picks the largest one
+  // that fits this machine rather than a fixed preference that may not.
+  const quant = useRecommendedQuant(model)
 
   const modelId = quant?.model_id || model.model_name
 
@@ -193,12 +191,10 @@ export function DownloadButtonPlaceholder({
           onClick={handleDownload}
           className={cn(isDownloading && 'hidden')}
         >
-          {(() => {
-            const label = extractQuantLabel(quant?.model_id)
-            return label
-              ? `${t('hub:download')} · ${label}`
-              : t('hub:download')
-          })()}
+          {/* Always the bare verb: the quant label resolves for some models and
+              not others, so including it made the grid's buttons different
+              widths. Which quant this is lives on the card and in the sheet. */}
+          {t('hub:download')}
         </Button>
       )}
     </div>

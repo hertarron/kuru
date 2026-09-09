@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (config: any) => ({ ...config, id: '/' }),
   useSearch: () => h.search,
+  useNavigate: () => vi.fn(),
 }))
 
 vi.mock('@/i18n/react-i18next-compat', () => ({
@@ -50,17 +51,12 @@ vi.mock('@/containers/HeaderPage', () => ({
   default: ({ children }: any) => <div data-testid="header-page">{children}</div>,
 }))
 
-vi.mock('@/containers/DropdownModelProvider', () => ({
-  default: ({ model }: any) => (
-    <div data-testid="dropdown">{model ? model.id : 'none'}</div>
-  ),
-}))
-
 vi.mock('@/containers/SetupScreen', () => ({
   default: () => <div data-testid="setup-screen" />,
 }))
 
-vi.mock('@/lib/utils', () => ({
+vi.mock('@/lib/utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/utils')>()),
   cn: (...c: any[]) => c.filter(Boolean).join(' '),
 }))
 
@@ -122,7 +118,6 @@ describe('Index route', () => {
     renderComponent()
     expect(screen.getByTestId('chat-input')).toBeInTheDocument()
     expect(screen.getByTestId('header-page')).toBeInTheDocument()
-    expect(screen.getByTestId('dropdown')).toBeInTheDocument()
     expect(screen.getByText('chat:description')).toBeInTheDocument()
   })
 
@@ -151,12 +146,11 @@ describe('Index route', () => {
     expect(screen.getByTestId('setup-screen')).toBeInTheDocument()
   })
 
-  it('passes threadModel from search into DropdownModelProvider and ChatInput', () => {
+  it('passes threadModel from search into ChatInput', () => {
     h.providers = [{ provider: 'openai', models: [] }]
     h.providerHasRemoteApiKeys.mockReturnValue(true)
     h.search = { threadModel: { id: 'gpt-x', provider: 'openai' } }
     renderComponent()
-    expect(screen.getByTestId('dropdown')).toHaveTextContent('gpt-x')
     expect(screen.getByTestId('chat-input')).toHaveTextContent('gpt-x')
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-initial', 'true')
   })
@@ -169,3 +163,4 @@ describe('Index route', () => {
     expect(h.useTools).toHaveBeenCalled()
   })
 })
+

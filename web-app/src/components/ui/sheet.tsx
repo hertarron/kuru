@@ -6,9 +6,33 @@ import { XIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { useTitlebarLayout } from "@/stores/titlebar-layout-store"
+import {
+  POINTER_EVENTS_RELEASE_DELAY,
+  releaseBodyPointerEvents,
+} from "@/lib/radix-pointer-events"
 
-function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />
+function Sheet({
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof SheetPrimitive.Root>) {
+  // Same Radix `pointer-events: none` leak the Dialog wrapper guards against;
+  // Sheet is that primitive under another name.
+  React.useEffect(() => releaseBodyPointerEvents, [])
+
+  const handleOpenChange = (open: boolean) => {
+    onOpenChange?.(open)
+    if (!open) {
+      window.setTimeout(releaseBodyPointerEvents, POINTER_EVENTS_RELEASE_DELAY)
+    }
+  }
+
+  return (
+    <SheetPrimitive.Root
+      data-slot="sheet"
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
 }
 
 function SheetTrigger({

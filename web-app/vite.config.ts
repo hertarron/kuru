@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv, Plugin } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
@@ -6,41 +6,6 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
 import packageJson from './package.json'
 const host = process.env.TAURI_DEV_HOST
-
-// Plugin to inject GA scripts in HTML
-function injectGoogleAnalytics(gaMeasurementId?: string): Plugin {
-  return {
-    name: 'inject-google-analytics',
-    transformIndexHtml(html) {
-      // Only inject GA scripts if GA_MEASUREMENT_ID is set
-      if (!gaMeasurementId) {
-        // Remove placeholder if no GA ID
-        return html.replace(/\s*<!-- INJECT_GOOGLE_ANALYTICS -->\n?/g, '')
-      }
-
-      const gaScripts = `<!-- Google Analytics -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){ dataLayer.push(arguments); }
-      gtag('consent','default',{
-        ad_storage:'denied',
-        analytics_storage:'denied',
-        ad_user_data:'denied',
-        ad_personalization:'denied',
-        wait_for_update:500
-      });
-      gtag('js', new Date());
-      gtag('config', '${gaMeasurementId}', {
-        debug_mode: (location.hostname === 'localhost'),
-        send_page_view: false
-      });
-    </script>`
-
-      return html.replace('<!-- INJECT_GOOGLE_ANALYTICS -->', gaScripts)
-    },
-  }
-}
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -59,7 +24,6 @@ export default defineConfig(({ mode }) => {
       nodePolyfills({
         include: ['path'],
       }),
-      injectGoogleAnalytics(env.GA_MEASUREMENT_ID),
     ],
     resolve: {
       alias: {
@@ -111,9 +75,6 @@ export default defineConfig(({ mode }) => {
 
       VERSION: JSON.stringify(packageJson.version),
 
-      POSTHOG_KEY: JSON.stringify(env.POSTHOG_KEY),
-      POSTHOG_HOST: JSON.stringify(env.POSTHOG_HOST),
-      GA_MEASUREMENT_ID: JSON.stringify(env.GA_MEASUREMENT_ID),
       MODEL_CATALOG_URL: JSON.stringify(
         'https://raw.githubusercontent.com/janhq/model-catalog/main/model_catalog_v2.json'
       ),
@@ -134,14 +95,17 @@ export default defineConfig(({ mode }) => {
     clearScreen: false,
     // 2. tauri expects a fixed port, fail if that port is not available
     server: {
-      port: 1420,
+      // Tauri's default 1420 and 5173 both sit inside Hyper-V/WSL reserved
+      // TCP port ranges on some Windows machines, which fails the bind with
+      // EACCES. 5373 is clear of the current ranges.
+      port: 5373,
       strictPort: true,
       host: host || false,
       hmr: host
         ? {
             protocol: 'ws',
             host,
-            port: 1421,
+            port: 5374,
           }
         : undefined,
       watch: {

@@ -6,27 +6,27 @@
       rel="icon"
       type="image/png"
       sizes="32x32"
-      href="/images/jan-logo.png"
+      href="/images/kuru-logo.png"
     />
     
     <link
       rel="icon"
       type="image/png"
       sizes="16x16"
-      href="/images/jan-logo.png"
+      href="/images/kuru-logo.png"
     />
-    <link rel="apple-touch-icon" href="/images/jan-logo.png" />
+    <link rel="apple-touch-icon" href="/images/kuru-logo.png" />
     <link
       rel="preload"
       as="image"
-      href="/images/jan-logo.png"
+      href="/images/kuru-logo.png"
       fetchpriority="high"
     />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover"
     />
-    <title>Jan</title>
+    <title>Kuru</title>
     <style>
       /* Inlined so it applies on first paint (external CSS is injected late). */
       #initial-loader {
@@ -46,34 +46,9 @@
         background: rgb(25, 25, 25);
       }
       #initial-loader img {
-        width: 5rem;
-        height: 5rem;
-        /* Static first; waves only if setup runs past the delay. */
-        animation: wave 2s ease-in-out 2.5s infinite;
-        transform-origin: 70% 70%;
-      }
-      @keyframes wave {
-        0%,
-        100% {
-          transform: rotate(0deg);
-        }
-        10%,
-        30% {
-          transform: rotate(14deg);
-        }
-        20% {
-          transform: rotate(-8deg);
-        }
-        40%,
-        60% {
-          transform: rotate(14deg);
-        }
-        50% {
-          transform: rotate(-8deg);
-        }
-        70% {
-          transform: rotate(0deg);
-        }
+        width: 7rem;
+        height: 7rem;
+        image-rendering: auto;
       }
       #initial-loader-caption {
         margin: 0;
@@ -128,8 +103,8 @@
   </head>
   <body>
     <div id="initial-loader" data-tauri-drag-region>
-      <img src="/images/jan-logo.png" alt="Jan Logo" data-tauri-drag-region />
-      <p id="initial-loader-caption" data-tauri-drag-region>Booting up Jan…</p>
+      <img src="/images/kuru-loading.gif" alt="Kuru" data-tauri-drag-region />
+      <p id="initial-loader-caption" data-tauri-drag-region>Spinning up Kuru…</p>
     </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>

@@ -27,6 +27,8 @@ interface TokenCounterProps {
   className?: string
   compact?: boolean
   additionalTokens?: number
+  /** Opens the context visualizer; the badge is inert without it. */
+  onClick?: () => void
 }
 
 const WARN_PCT = 85
@@ -44,9 +46,10 @@ export const TokenCounter = memo(function TokenCounter({
   messages = [],
   className,
   additionalTokens = 0,
+  onClick,
 }: TokenCounterProps) {
   const { t } = useTranslation()
-  const { calculateTokens, ...tokenData } = useTokensCount(messages)
+  const tokenData = useTokensCount(messages)
 
   const [isAnimating, setIsAnimating] = useState(false)
   const [prevTokenCount, setPrevTokenCount] = useState(0)
@@ -54,10 +57,6 @@ export const TokenCounter = memo(function TokenCounter({
   const timersRef = useRef<{ update?: NodeJS.Timeout; anim?: NodeJS.Timeout }>(
     {}
   )
-
-  const handleCalculateTokens = () => {
-    calculateTokens()
-  }
 
   useEffect(() => {
     const currentTotal = tokenData.tokenCount + additionalTokens
@@ -99,9 +98,8 @@ export const TokenCounter = memo(function TokenCounter({
   }, [pct])
 
   // Remote providers report no context-window denominator, so a percentage is
-  // meaningless. Show a plain total-tokens badge once a turn has counted tokens.
+  // meaningless; show a plain total-tokens badge instead.
   if (!tokenData.maxTokens) {
-    if (totalTokens <= 0) return null
     return (
       <TokenCountOnly
         totalTokens={totalTokens}
@@ -109,6 +107,7 @@ export const TokenCounter = memo(function TokenCounter({
         outputTokens={tokenData.outputTokens}
         modelDisplayName={tokenData.modelDisplayName}
         className={className}
+        onClick={onClick}
       />
     )
   }
@@ -151,8 +150,21 @@ export const TokenCounter = memo(function TokenCounter({
       <Tooltip>
         <TooltipTrigger asChild>
           <div
-            className={cn('relative cursor-pointer', className)}
-            onClick={handleCalculateTokens}
+            className={cn(onClick && 'cursor-pointer', 'relative', className)}
+            onClick={onClick}
+            role={onClick ? 'button' : undefined}
+            tabIndex={onClick ? 0 : undefined}
+            aria-label={onClick ? 'Context sent to model' : undefined}
+            onKeyDown={
+              onClick
+                ? (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      onClick()
+                    }
+                  }
+                : undefined
+            }
           >
             <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-background border border-border">
               <span
@@ -338,18 +350,30 @@ function TokenCountOnly({
   outputTokens,
   modelDisplayName,
   className,
+  onClick,
 }: {
   totalTokens: number
   inputTokens?: number
   outputTokens?: number
   modelDisplayName?: string
   className?: string
+  onClick?: () => void
 }) {
   return (
     <TooltipProvider delayDuration={400}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className={cn('relative cursor-default', className)}>
+          <div
+            className={cn(
+              onClick ? 'cursor-pointer' : 'cursor-default',
+              'relative',
+              className
+            )}
+            onClick={onClick}
+            role={onClick ? 'button' : undefined}
+            tabIndex={onClick ? 0 : undefined}
+            aria-label={onClick ? 'Context sent to model' : undefined}
+          >
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-background border border-border">
               <IconSum className="size-3.5 text-muted-foreground shrink-0" />
               <span className="text-xs font-medium tabular-nums text-foreground">

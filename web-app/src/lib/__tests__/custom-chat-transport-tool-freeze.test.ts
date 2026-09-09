@@ -35,8 +35,15 @@ vi.mock('@/hooks/useModelProvider', () => ({
     }),
   },
 }))
-vi.mock('@/hooks/useAssistant', () => ({
-  useAssistant: { getState: () => ({ currentAssistant: null }) },
+vi.mock('@/hooks/useCharacters', () => ({
+  useCharacters: { getState: () => ({ currentCharacter: null }) },
+  // Mirrors the real export: the transport resolves a thread's character
+  // through it when composing the system prompt.
+  resolveThreadCharacter: (thread: { assistants?: { id: string }[] } | undefined, characters: { id: string }[]) => {
+    const embedded = thread?.assistants?.[0]
+    if (!embedded || embedded.id === 'model-only') return undefined
+    return characters.find((c) => c.id === embedded.id) ?? embedded
+  },
 }))
 vi.mock('@/hooks/useThreads', () => ({
   useThreads: { getState: () => ({ threads: {} }) },
@@ -110,3 +117,5 @@ describe('CustomChatTransport smart-tool-routing freeze', () => {
     expect(h.getRelevantTools).toHaveBeenCalledTimes(2)
   })
 })
+
+

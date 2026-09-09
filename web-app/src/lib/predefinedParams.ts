@@ -31,6 +31,7 @@ export type SamplerCap =
   | 'json_schema'
   | 'ignore_eos'
   | 'sampler_order'
+  | 'stop'
   | 'backend_sampling'
   | 'thinking_budget'
   | 'client_only'
@@ -370,6 +371,16 @@ export const paramsSettings: Record<string, ParamDef> = {
     controllerType: 'input',
     controllerProps: { placeholder: 'top_k,typ_p,top_p,min_p,xtc,temperature' },
     capability: 'sampler_order',
+  },
+  stop: {
+    key: 'stop',
+    title: 'Stop Strings',
+    description:
+      'Generation halts the moment one of these appears, and the text is cut before it. One per line. The classic use in roleplay is your own persona name followed by a colon, so the model cannot write your turn.',
+    value: '',
+    controllerType: 'textarea',
+    controllerProps: { rows: 3, placeholder: 'You:\nKai:' },
+    capability: 'stop',
   },
   backend_sampling: {
     key: 'backend_sampling',

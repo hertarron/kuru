@@ -203,6 +203,127 @@ export const repairDetachedAssistants = (
   return [...writes.values()]
 }
 
+export type SplicePlan = {
+  /** Direct children of the deleted node, rewritten onto the grandparent. */
+  reparented: ThreadMessage[]
+  /**
+   * Child promoted into the deleted node's slot on the active path, if any.
+   * Prefers the child the node itself had marked active, else the newest --
+   * deterministic, instead of relying on the newest-sibling fallback.
+   */
+  promotedChildId: string | null
+  /** True when the deleted node was a root (its promoted child becomes root). */
+  wasActiveRootEligible: boolean
+}
+
+/**
+ * Plan splicing `target` out of the tree: its direct children are re-parented
+ * to the target's parent (or become roots), so the visible conversation stays
+ * continuous -- "remove this turn" -- rather than amputating everything below.
+ * Pure: returns only the messages that need a write; the caller deletes the
+ * target itself and re-points the active branch/root.
+ *
+ * No-op plan for legacy (un-branched) threads: there are no links to fix up,
+ * deleting from the linear list is already correct.
+ */
+export const planSplice = (
+  messages: ThreadMessage[],
+  target: ThreadMessage
+): SplicePlan => {
+  if (!hasBranching(messages)) {
+    return { reparented: [], promotedChildId: null, wasActiveRootEligible: false }
+  }
+  const parentId = rawParent(target)
+  // Un-linked legacy row inside an otherwise branched thread: no children can
+  // reference it through the tree, so there is nothing to splice either.
+  if (parentId === undefined) {
+    return { reparented: [], promotedChildId: null, wasActiveRootEligible: false }
+  }
+
+  const children = childrenOf(messages, target.id)
+  const grandparentId = parentId === null ? null : parentId
+  const activeChildId = getActiveChildId(target)
+  const promoted =
+    (activeChildId && children.find((c) => c.id === activeChildId)) ||
+    children[children.length - 1]
+
+  return {
+    reparented: children.map((c) => withParentId(c, grandparentId)),
+    promotedChildId: promoted ? promoted.id : null,
+    wasActiveRootEligible: parentId === null,
+  }
+}
+
+
+export type UserDeletePlan = {
+  /**
+   * Direct assistant children of the target -- every version of the paired
+   * reply. They are deleted along with the turn instead of being re-parented,
+   * so an answer never survives pointing at a question that no longer exists.
+   */
+  doomedReplyIds: string[]
+  /**
+   * Children of those replies, promoted onto the grandparent so any later
+   * turns continue through the gap left by the removed exchange.
+   */
+  reparented: ThreadMessage[]
+  /** Grandchild taking the deleted turn's slot on the active path, if any. */
+  promotedChildId: string | null
+  /** True when the deleted turn was a root (promoted child becomes root). */
+  wasRootTurn: boolean
+}
+
+/**
+ * Plan deleting a USER turn together with its paired replies. Unlike
+ * planSplice, the direct assistant children are removed rather than kept --
+ * an answer to a deleted question would otherwise re-attach to the previous
+ * turn and read as answering the wrong thing. Later turns (grandchildren)
+ * survive, spliced up so the conversation stays continuous.
+ *
+ * Pure: returns writes and ids; caller persists them and removes the rows.
+ * No-op plan on legacy/un-branched threads (the handler pairs by list order
+ * there instead).
+ */
+export const planUserDeleteWrites = (
+  messages: ThreadMessage[],
+  target: ThreadMessage
+): UserDeletePlan => {
+  if (!hasBranching(messages)) {
+    return {
+      doomedReplyIds: [],
+      reparented: [],
+      promotedChildId: null,
+      wasRootTurn: false,
+    }
+  }
+
+  const parentId = getParentId(target)
+  const replies = messages.filter(
+    (m) => rawParent(m) === target.id && m.role === ChatCompletionRole.Assistant
+  )
+  const replyIds = new Set(replies.map((r) => r.id))
+  const grandchildren = replies.flatMap((r) =>
+    messages.filter((m) => rawParent(m) === r.id)
+  )
+
+  // Which grandchild takes over the turn's slot: follow the chain the turn
+  // had marked active, else the newest reply's newest child.
+  const activeReplyId = getActiveChildId(target)
+  const activeReply =
+    (activeReplyId && replies.find((r) => r.id === activeReplyId)) ||
+    replies[replies.length - 1]
+  const promotedGrandchild = activeReply
+    ? pickActiveChild(messages, activeReply)
+    : undefined
+
+  return {
+    doomedReplyIds: [...replyIds],
+    reparented: grandchildren.map((c) => withParentId(c, parentId)),
+    promotedChildId: promotedGrandchild ? promotedGrandchild.id : null,
+    wasRootTurn: parentId === null,
+  }
+}
+
 export type ContinuationPlan = {
   parentId: string | null
   deletePartialId: string | null
@@ -232,6 +353,10 @@ export const planContinuation = (
 /**
  * Build a new sibling version of `source`: fresh id/timestamp, same parent,
  * no children, optional text override. Used for edit-user / edit-assistant forks.
+ *
+ * Fork siblings are independent branches: any inherited surgical tag is
+ * stripped, otherwise a fork of a surgical replacement would be mistaken for
+ * a shared-subtree sibling during version navigation.
  */
 export const makeSibling = (
   source: ThreadMessage,
@@ -254,3 +379,20 @@ export const makeSibling = (
     metadata: { ...sourceMeta, parentId: getParentId(source) },
   }
 }
+
+/**
+ * Destructive in-place edit: same id, same parent, same children -- only the
+ * text changes. The tree is never touched, so no ownership can drift.
+ * Pure: returns the updated row; caller persists it.
+ */
+export const inPlaceEditContent = (
+  target: ThreadMessage,
+  text: string
+): ThreadMessage => ({
+  ...target,
+  status: MessageStatus.Ready,
+  completed_at: Date.now(),
+  content: [
+    { type: ContentType.Text, text: { value: text, annotations: [] } },
+  ],
+})

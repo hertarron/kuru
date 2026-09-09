@@ -200,7 +200,7 @@ describe('useThreads - coverage', () => {
     })
 
     act(() => {
-      result.current.updateCurrentThreadAssistant({ id: 'a1', name: 'Asst' } as any)
+      result.current.updateCurrentThreadCharacter({ id: 'a1', name: 'Asst' } as any)
     })
 
     expect(result.current.threads['t1'].assistants?.[0]?.id).toBe('a1')
@@ -215,7 +215,7 @@ describe('useThreads - coverage', () => {
     })
 
     act(() => {
-      result.current.updateCurrentThreadAssistant(undefined as any)
+      result.current.updateCurrentThreadCharacter(undefined as any)
     })
 
     expect(result.current.threads['t1'].assistants).toEqual([])
@@ -225,7 +225,7 @@ describe('useThreads - coverage', () => {
     const { result } = renderHook(() => useThreads())
 
     act(() => {
-      result.current.updateCurrentThreadAssistant({ id: 'a1' } as any)
+      result.current.updateCurrentThreadCharacter({ id: 'a1' } as any)
     })
 
     expect(result.current.currentThreadId).toBeUndefined()
@@ -450,3 +450,4 @@ describe('useThreads - coverage', () => {
     expect(favorites).toHaveLength(2)
   })
 })
+

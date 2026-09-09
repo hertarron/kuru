@@ -15,12 +15,19 @@ vi.mock('@/hooks/useModelProvider', () => ({
 }))
 
 const mockState = vi.hoisted(() => ({
-  currentAssistant: null as unknown,
+  currentCharacter: null as unknown,
   threads: {} as Record<string, unknown>,
 }))
 
-vi.mock('@/hooks/useAssistant', () => ({
-  useAssistant: { getState: () => ({ currentAssistant: mockState.currentAssistant }) },
+vi.mock('@/hooks/useCharacters', () => ({
+  useCharacters: { getState: () => ({ currentCharacter: mockState.currentCharacter }) },
+  // Mirrors the real export: the transport resolves a thread's character
+  // through it when composing the system prompt.
+  resolveThreadCharacter: (thread: { assistants?: { id: string }[] } | undefined, characters: { id: string }[]) => {
+    const embedded = thread?.assistants?.[0]
+    if (!embedded || embedded.id === 'model-only') return undefined
+    return characters.find((c) => c.id === embedded.id) ?? embedded
+  },
 }))
 
 vi.mock('@/hooks/useThreads', () => ({
@@ -55,7 +62,7 @@ describe('CustomChatTransport', () => {
   let transport: CustomChatTransport
 
   beforeEach(() => {
-    mockState.currentAssistant = null
+    mockState.currentCharacter = null
     mockState.threads = {}
     transport = new CustomChatTransport('You are helpful', 'thread-1')
   })
@@ -142,7 +149,7 @@ describe('CustomChatTransport', () => {
       (t as unknown as Resolvable).getActiveInferenceParams()
 
     it('reads params from the thread assistant when set', () => {
-      mockState.currentAssistant = { id: 'default', parameters: { temperature: 0.1 } }
+      mockState.currentCharacter = { id: 'default', parameters: { temperature: 0.1 } }
       mockState.threads = {
         'thread-1': { assistants: [{ id: 'agent-b', parameters: { temperature: 0.9 } }] },
       }
@@ -150,13 +157,13 @@ describe('CustomChatTransport', () => {
     })
 
     it('uses no params for a model-only thread, ignoring the global default', () => {
-      mockState.currentAssistant = { id: 'default', parameters: { temperature: 0.1 } }
+      mockState.currentCharacter = { id: 'default', parameters: { temperature: 0.1 } }
       mockState.threads = { 'thread-1': { assistants: [{ id: 'model-only' }] } }
       expect(resolve()).toEqual({})
     })
 
     it('falls back to the global assistant only when off-thread', () => {
-      mockState.currentAssistant = { id: 'default', parameters: { temperature: 0.1 } }
+      mockState.currentCharacter = { id: 'default', parameters: { temperature: 0.1 } }
       mockState.threads = {}
       expect(resolve(new CustomChatTransport('sys'))).toEqual({ temperature: 0.1 })
     })
@@ -200,3 +207,8 @@ describe('normalizeToolInputSchema edge cases', () => {
     expect((result.properties as any).tags.items.type).toBe('string')
   })
 })
+
+
+
+
+

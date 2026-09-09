@@ -16,7 +16,7 @@ import { useServiceStore } from '@/hooks/useServiceHub'
 import { useToolAvailable } from '@/hooks/useToolAvailable'
 import { ModelFactory } from './model-factory'
 import { useModelProvider } from '@/hooks/useModelProvider'
-import { useAssistant } from '@/hooks/useAssistant'
+import { useCharacters, resolveThreadCharacter } from '@/hooks/useCharacters'
 import { useThreads } from '@/hooks/useThreads'
 import { useAttachments } from '@/hooks/useAttachments'
 import { useMCPServers } from '@/hooks/useMCPServers'
@@ -28,6 +28,7 @@ import {
   WEB_FETCH_INPUT_SCHEMA,
 } from '@/lib/webSearchTool'
 import { useAppState } from '@/hooks/useAppState'
+import { useModelCalibration } from '@/hooks/useModelCalibration'
 import { unloadLlamaModel, getLoadedModels } from '@janhq/tauri-plugin-llamacpp-api'
 import { describeEngineError } from '@/lib/engineError'
 import { i18n } from '@/i18n/react-i18next-compat'
@@ -49,12 +50,47 @@ import {
   estimateTokens,
   type ContextManagerConfig,
 } from './context-manager'
+import {
+  effectiveSizes,
+  planMemoryWindow,
+  rootIdOf,
+  rootScope,
+  DEFAULT_MEMORY_SIZES,
+} from './thread-memory'
+import { useThreadMemory } from '@/hooks/useThreadMemory'
 import { mcpOrchestrator } from '@/lib/mcp-orchestrator'
+import {
+  useContextSnapshotStore,
+  buildMessageSections,
+  type ContextSnapshotSection,
+  type ContextSectionKind,
+} from '@/stores/context-snapshot-store'
 import { isRouterModelSelectable } from '@/lib/mcp-router-model-filter'
 import { encodeAudioSentinel, parseAudioDataUrl } from '@/lib/audio-sentinel'
 import { encodeVideoSentinel, parseVideoDataUrl } from '@/lib/video-sentinel'
 import { isPredefinedRemoteProvider } from '@/lib/providerCaps'
 import { paramsSettings } from '@/lib/predefinedParams'
+import {
+  buildCharacterPromptParts,
+  type CharacterPromptPart,
+} from './character-prompt'
+import { useGeneralSetting } from '@/hooks/useGeneralSetting'
+import { resolveThreadPersona } from '@/hooks/usePersonas'
+import { isRoleplayCharacter } from '@/lib/character-card'
+import { cleanPriorTurns } from '@/lib/rp-text'
+import { rpTextSettings } from '@/hooks/useRpTextSettings'
+import { useLorebooks } from '@/hooks/useLorebooks'
+import { lorebookRuntimeSettings } from '@/hooks/useLorebookSettings'
+import { resolveLorebooks, activeLorebooks } from './lorebook-selection'
+import {
+  applyDepthInjections,
+  chatScanText,
+  groupActivations,
+  joinEntries,
+  scanLorebooks,
+  type ActivatedEntry,
+  type LorebookInjections,
+} from './lorebook-runtime'
 
 export type TokenUsageCallback = (
   usage: LanguageModelUsage,
@@ -587,6 +623,46 @@ export function coalesceMessagesForAlternation(
   return out
 }
 
+function modelMessageText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(
+      (p): p is { type: 'text'; text: string } =>
+        !!p && typeof p === 'object' && 'type' in p && p.type === 'text'
+    )
+    .map((p) => p.text)
+    .join('\n')
+}
+
+/**
+ * Fold leading assistant turns into the system prompt. RP threads open with
+ * the character's initial message — an assistant turn directly after the
+ * system prompt — which strict chat templates (Qwen3.5+, various llama.cpp
+ * Jinja presets) reject: "conversation roles must alternate". The system
+ * prompt travels via streamText's separate `system` param (never inside
+ * messages), so the greeting text merges into that string instead.
+ */
+export function foldLeadingAssistantIntoSystem<
+  T extends { role: string; content: unknown },
+>(
+  messages: T[],
+  systemText?: string
+): { messages: T[]; system?: string; folded: string[] } {
+  let sys = systemText
+  const folded: string[] = []
+  let i = 0
+  while (i < messages.length && messages[i].role === 'assistant') {
+    const text = modelMessageText(messages[i].content)
+    if (text.trim()) {
+      folded.push(text)
+      sys = sys ? `${sys}\n\n${text}` : text
+    }
+    i++
+  }
+  return { messages: messages.slice(i), system: sys, folded }
+}
+
 const TOOL_RESPONSE_ONLY = /^<tool_response>[\s\S]*<\/tool_response>$/
 
 /**
@@ -780,7 +856,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
         ? (threadAssistant.parameters ?? {})
         : {}
     }
-    return useAssistant.getState().currentAssistant?.parameters ?? {}
+    return useCharacters.getState().currentCharacter?.parameters ?? {}
   }
 
   setOnTokenUsage(callback: TokenUsageCallback | undefined) {
@@ -1157,6 +1233,29 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
         }
       }
 
+      // A background fit-test probe holds the GPU; chatting preempts
+      // measuring. The starter's in-flight await drops the run when its
+      // probe call rejects with the cancellation.
+      if (
+        (providerId === 'llamacpp' || providerId === 'mlx') &&
+        Object.keys(useModelCalibration.getState().running).length > 0
+      ) {
+        try {
+          const hub = useServiceStore.getState().serviceHub
+          const modelsSvc = hub?.models()
+          const cancel = modelsSvc?.cancelCalibrateModel
+          if (modelsSvc && typeof cancel === 'function') {
+            await cancel.call(modelsSvc).catch(() => undefined)
+          }
+        } catch {
+          // Fail open: the UI-side cleanup below still runs.
+        }
+        const calibStore = useModelCalibration.getState()
+        Object.keys(calibStore.running).forEach((id) =>
+          calibStore.endRun(id)
+        )
+      }
+
       // Per-model sidebar sampling defaults flow through as request-body
       // overrides (router mode can't bake them into CLI args). Assistant
       // params still win — they're the explicit per-conversation override.
@@ -1226,10 +1325,42 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
 
     const selectedModel = useModelProvider.getState().selectedModel
 
+    const maxContextTokens = (() => {
+      const raw = inferenceParams.max_context_tokens
+      return typeof raw === 'number' ? raw : (Number(raw) || 0)
+    })()
+
     const filesInstruction = this.buildFilesSystemInstruction(messagesToConvert)
     const webSearchInstruction = this.buildWebSearchSystemInstruction()
+
+    // Memory windowing replaces trim/compact on threads that hold folded
+    // history: covered messages leave the prompt (their text lives in the
+    // chapters/canon blocks below), pins and the raw tail always stay.
+    // Threads with no memory record take the legacy path byte-identical.
+    const memory = this.resolveMemoryWindow(threadId, messagesToConvert)
+    const effectivePreWindow = memory
+      ? messagesToConvert.filter(
+          (m) => !memory.excludedIds.has(m.id.replace(/_w\d+$/, ''))
+        )
+      : messagesToConvert
+
+    // World info is resolved before the context budget is applied so the
+    // trimmer sees what the entries add to the system prompt. On memory
+    // threads the scanner sees what is sent (windowed): scanning folded
+    // text would trigger entries whose words never reach the model.
+    const lorebook = this.resolveLorebookContext(
+      effectivePreWindow,
+      threadId,
+      maxContextTokens
+    )
     const rawSystem =
-      [this.systemMessage, filesInstruction, webSearchInstruction]
+      [
+        ...lorebook.systemSections.map((s) => s.text),
+        filesInstruction,
+        webSearchInstruction,
+        memory?.canon ? `# Permanent record\n${memory.canon}` : '',
+        memory?.chapters ? `# Story so far\n${memory.chapters}` : '',
+      ]
         .filter((s) => typeof s === 'string' && s.trim().length > 0)
         .join('\n\n') || undefined
     // Drop whitespace-only system prompts so we don't send a useless system
@@ -1246,16 +1377,12 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       return isNaN(n) ? undefined : n
     })()
 
-    const maxContextTokens = (() => {
-      const raw = inferenceParams.max_context_tokens
-      return typeof raw === 'number' ? raw : (Number(raw) || 0)
-    })()
     const autoCompact =
       inferenceParams.auto_compact === true ||
       inferenceParams.auto_compact === 'true'
 
     // Auto-trim or auto-compact conversation history when max_context_tokens is configured
-    let effectiveMessages = messagesToConvert
+    let effectiveMessages = effectivePreWindow
     if (maxContextTokens > 0) {
       const contextConfig: ContextManagerConfig = {
         maxContextTokens,
@@ -1267,7 +1394,22 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
         ? estimateTokens(effectiveSystem) + 4
         : 0
 
-      if (autoCompact && this.model) {
+      if (memory) {
+        // Windowing already removed the folded history; the trimmer is only
+        // a backstop for an overgrown raw tail. The single-summary compact
+        // never runs here — chapters+canon are the compact form.
+        const trimResult = trimMessages(
+          effectivePreWindow,
+          contextConfig,
+          systemPromptTokens
+        )
+        effectiveMessages = trimResult.messages
+        if (trimResult.trimmedCount > 0) {
+          console.debug(
+            `[context-manager] Trimmed ${trimResult.trimmedCount} oldest messages to fit context budget`
+          )
+        }
+      } else if (autoCompact && this.model) {
         const compactResult = await compactMessages(
           messagesToConvert,
           contextConfig,
@@ -1322,13 +1464,20 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       )
     )
 
+    // Opinionated RP cleanups, prior turns only and roleplay characters only.
+    // Placed before the continue-prefill is appended so the prefill, which is
+    // part of the turn being generated, is never touched.
+    const cleanedMessages = lorebook.roleplay
+      ? cleanPriorTurns(baseMessages, rpTextSettings())
+      : baseMessages
+
     // If continuing a truncated response, append the partial assistant content as a
     // prefill so the model resumes from where it left off rather than regenerating.
     const continueContent = this.continueFromContent
     this.continueFromContent = null
-    const modelMessages = continueContent
+    const unfoldedMessages = continueContent
       ? [
-          ...baseMessages,
+          ...cleanedMessages,
           {
             role: 'assistant' as const,
             content: [
@@ -1346,7 +1495,21 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
             ],
           },
         ]
-      : baseMessages
+      : cleanedMessages
+    const { messages: foldedMessages, system: foldedSystem, folded } =
+      foldLeadingAssistantIntoSystem(unfoldedMessages, effectiveSystem)
+
+    // At-depth world info merges into the turn at its depth boundary; see
+    // lorebook-runtime for why it doesn't become a turn of its own. With no
+    // turns left to merge into it falls back to the system string.
+    const { messages: modelMessages, unplaced } = applyDepthInjections(
+      foldedMessages,
+      lorebook.atDepth
+    )
+    const unplacedText = joinEntries(unplaced)
+    const payloadSystem = unplacedText
+      ? [foldedSystem, unplacedText].filter(Boolean).join('\n\n')
+      : foldedSystem
 
     // Include tools only if we have tools loaded AND model supports them
     const hasTools = Object.keys(this.tools).length > 0
@@ -1366,13 +1529,142 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     useAppState.getState().updateLiveTokenStats(undefined)
     useAppState.getState().updateThreadLiveTokenStats(threadId, undefined)
 
+    // Context snapshot: capture exactly what reaches the model, after every
+    // transformation, so the visualizer shows ground truth rather than intent.
+    if (threadId) {
+      const sections: ContextSnapshotSection[] = []
+      const pushSection = (
+        kind: ContextSectionKind,
+        label: string,
+        text: string | undefined
+      ) => {
+        if (!text || !text.trim()) return
+        sections.push({
+          id: kind,
+          kind,
+          label,
+          tokens: estimateTokens(text),
+          content: text,
+        })
+      }
+      // The exact blocks that composed the system string: the character's
+      // definition broken up, with world info at the positions it landed in.
+      const attachedCharacter = lorebook.character
+      for (const part of lorebook.systemSections) {
+        if (!part.text.trim()) continue
+        const kind: ContextSectionKind =
+          part.slot === 'lorebook'
+            ? 'world-info'
+            : part.slot === 'persona'
+              ? 'persona'
+              : 'system-prompt'
+        sections.push({
+          id: `${kind}-${sections.length}`,
+          kind,
+          label: part.label,
+          tokens: estimateTokens(part.text),
+          content: part.text,
+        })
+      }
+      pushSection('files-instruction', 'Files instruction', filesInstruction)
+      pushSection(
+        'web-search-instruction',
+        'Web search instruction',
+        webSearchInstruction
+      )
+      // Folded history travels as its own rows, mirroring the system-string
+      // order above, so the budget accounts for what memory costs.
+      if (memory?.canon) {
+        sections.push({
+          id: `canon-${sections.length}`,
+          kind: 'canon',
+          label: 'Canon',
+          tokens: estimateTokens(memory.canon),
+          content: memory.canon,
+        })
+      }
+      if (memory?.chapters) {
+        sections.push({
+          id: `chapters-${sections.length}`,
+          kind: 'chapters',
+          label: 'Chapters',
+          tokens: estimateTokens(memory.chapters),
+          content: memory.chapters,
+        })
+      }
+      // The opening message travels folded into the system prompt (strict
+      // chat-template compatibility); surface it as its own entry here.
+      for (const text of folded) {
+        if (!text.trim()) continue
+        sections.push({
+          id: `initial-message-${sections.length}`,
+          kind: 'initial-message',
+          label: 'Initial message',
+          tokens: estimateTokens(text),
+          content: text,
+        })
+      }
+      // At-depth entries normally show up inside the turn they merged into;
+      // only the no-turns fallback needs its own row.
+      pushSection('world-info', 'World info (at depth)', unplacedText)
+      // Trace which thread message each model row came from: the same
+      // split/coalesce the payload went through. Aligned from the tail
+      // because the greeting fold above drops leading rows. `_wN`
+      // suffixes are tool-wave fragments of one turn. Synthetic rows
+      // (compact summaries) match no thread message and stay unnumbered
+      // in the visualizer rather than misnumbered.
+      const trace = coalesceMessagesForAlternation(
+        splitAssistantToolWaves(effectiveMessages)
+      ).map((m) => m.id.replace(/_w\d+$/, '') || undefined)
+      const sourceIds =
+        trace.length >= modelMessages.length
+          ? trace.slice(trace.length - modelMessages.length)
+          : [
+              ...Array<string | undefined>(
+                modelMessages.length - trace.length
+              ).fill(undefined),
+              ...trace,
+            ]
+      sections.push(
+        ...buildMessageSections(
+          modelMessages,
+          sections.length,
+          {
+            assistant: attachedCharacter?.name,
+            user:
+              resolveThreadPersona(useThreads.getState().threads[threadId])
+                ?.name ||
+              useGeneralSetting.getState().userName ||
+              undefined,
+          },
+          sourceIds
+        )
+      )
+      const totalTokens = sections.reduce((acc, s) => acc + s.tokens, 0)
+      useContextSnapshotStore.getState().capture({
+        threadId,
+        createdAt: Date.now(),
+        sections,
+        totalTokens,
+        maxContextTokens: maxContextTokens > 0 ? maxContextTokens : null,
+        assistantLabel: attachedCharacter?.name,
+        // `_wN` suffixes come from splitting one assistant turn into tool
+        // waves; the branch check compares against stored message ids.
+        promptMessageIds: Array.from(
+          new Set(
+            effectiveMessages.map((m) => m.id.replace(/_w\d+$/, ''))
+          )
+        ),
+      })
+    }
+
     const result = streamText({
       model: this.model,
       messages: modelMessages,
       abortSignal: options.abortSignal,
       tools: shouldEnableTools ? this.tools : undefined,
       toolChoice: shouldEnableTools ? 'auto' : undefined,
-      system: effectiveSystem,
+      system: payloadSystem,
       ...(maxOutputTokens !== undefined ? { maxTokens: maxOutputTokens } : {}),
       ...(reasoningProviderOptions
         ? { providerOptions: reasoningProviderOptions }
@@ -1423,6 +1715,14 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
           // Use provider's outputTokens, or llama.cpp completionTokens, or fall back to text delta count
           const outputTokens = usage?.outputTokens ?? 0
           const inputTokens = usage?.inputTokens
+
+          // Real tokenizer count for the prompt we just snapshotted: lets the
+          // context visualizer scale its character heuristic to ground truth.
+          if (threadId && typeof inputTokens === 'number') {
+            useContextSnapshotStore
+              .getState()
+              .recordActualPromptTokens(threadId, inputTokens)
+          }
 
           // Use llama.cpp's tokens per second if available, otherwise calculate from duration
           let tokenSpeed: number
@@ -1585,6 +1885,170 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
   }
 
   /**
+   * Folded-history windowing for threads with a memory record.
+   *
+   * Returns the ids to withhold from the prompt plus the chapters/canon
+   * blocks that carry their meaning instead. The blocks ride at the end of
+   * the system string so the character definition ahead of them keeps its
+   * bytes (and its KV cache) stable as memory grows.
+   *
+   * Returns null for threads with nothing folded: those keep the legacy
+   * trim/compact path exactly as before.
+   */
+  private resolveMemoryWindow(
+    threadId: string | undefined,
+    messages: UIMessage[]
+  ): { excludedIds: Set<string>; canon: string; chapters: string } | null {
+    if (!threadId) return null
+    const thread = useThreads.getState().threads[threadId]
+    if (!thread) return null
+    const record = useThreadMemory.getState().records[threadId]
+    if (
+      !record ||
+      (Object.values(record.roots).every(
+        (r) => r.chapters.length === 0 && r.canon.length === 0
+      ) &&
+        record.pins.length === 0)
+    ) {
+      return null
+    }
+    const character = resolveThreadCharacter(
+      thread,
+      useCharacters.getState().characters ?? []
+    )
+    if (!isRoleplayCharacter(character)) return null
+
+    const sizes = effectiveSizes(thread.metadata, DEFAULT_MEMORY_SIZES)
+    const pins = new Set(record.pins)
+    const path = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      text: (Array.isArray(m.parts) ? m.parts : [])
+        .map((p) => (p.type === 'text' ? ((p as { text?: string }).text ?? '') : ''))
+        .join(''),
+    }))
+    const scope = rootScope(record, rootIdOf(path))
+    return planMemoryWindow({ path, scope, sizes, pins })
+  }
+
+  /**
+   * Run the lorebook scanner for this send and lay the results out.
+   *
+   * Returns the system prompt as labeled sections with world info already woven
+   * in at its positions, plus the at-depth entries for the message array. The
+   * sections double as the context snapshot's system rows, so the visualizer
+   * shows the same blocks the model gets rather than a reconstruction.
+   */
+  private resolveLorebookContext(
+    messages: UIMessage[],
+    threadId: string | undefined,
+    maxContextTokens: number
+  ): {
+    character?: Character
+    /** Whether the RP layer applies at all; see `isRoleplayCharacter`. */
+    roleplay: boolean
+    systemSections: CharacterPromptPart[]
+    atDepth: LorebookInjections['atDepth']
+    activated: ActivatedEntry[]
+  } {
+    const settings = lorebookRuntimeSettings()
+    const thread = threadId
+      ? useThreads.getState().threads[threadId]
+      : undefined
+    // Same resolution the thread route uses, so the definition the scanner
+    // weaves world info into is the one the route composed.
+    const character = resolveThreadCharacter(
+      thread,
+      useCharacters.getState().characters ?? []
+    )
+    // The persona this chat is played with: a per-chat pin, else the active
+    // one. Its name is what `{{user}}` resolves to for both the scanner and
+    // the composed definition, so they can't disagree.
+    // A coding assistant opts out of the whole RP layer. Gating here rather
+    // than only in the UI matters: an always-active lorebook would otherwise
+    // still inject into a coding chat whose chatbox shows no way to stop it.
+    const roleplay = isRoleplayCharacter(character)
+
+    const persona = roleplay ? resolveThreadPersona(thread) : undefined
+    const userName =
+      persona?.name || useGeneralSetting.getState().userName || undefined
+
+    // Attached to the character, always active, or added to this chat -- and
+    // muted per chat. The pill shows exactly this set.
+    const books = roleplay
+      ? activeLorebooks(
+          resolveLorebooks({
+            library: useLorebooks.getState().lorebooks ?? [],
+            characterLorebookIds: character?.lorebookIds,
+            threadState: thread?.metadata?.lorebooks,
+          })
+        )
+      : []
+
+    const budgetTokens =
+      settings.budgetPercent > 0 && maxContextTokens > 0
+        ? Math.floor((maxContextTokens * settings.budgetPercent) / 100)
+        : 0
+
+    const { activated, droppedForBudget } = scanLorebooks({
+      books,
+      chatText: chatScanText(messages, settings.scanDepth),
+      settings,
+      budgetTokens,
+      vars: { char: character?.name, user: userName },
+    })
+    if (droppedForBudget.length > 0) {
+      console.debug(
+        `[lorebook] ${droppedForBudget.length} entries dropped to fit the world-info budget (${budgetTokens} tokens)`
+      )
+    }
+
+    const injections = groupActivations(activated)
+    const worldInfo = {
+      beforeChar: joinEntries(injections.beforeChar),
+      afterChar: joinEntries(injections.afterChar),
+      emTop: joinEntries(injections.emTop),
+      emBottom: joinEntries(injections.emBottom),
+    }
+
+    // With a character, world info slots into its composed definition. Without
+    // one there is no definition to bracket, so the plain system prompt stands
+    // in for it and the slots keep their relative order around it.
+    const systemSections: CharacterPromptPart[] = character
+      ? buildCharacterPromptParts(character, { userName, worldInfo, persona })
+      : (() => {
+          const lead = buildCharacterPromptParts(undefined, {
+            worldInfo: { beforeChar: worldInfo.beforeChar },
+          })
+          const rest = buildCharacterPromptParts(undefined, {
+            worldInfo: { ...worldInfo, beforeChar: undefined },
+          })
+          const base = this.systemMessage?.trim()
+          return [
+            ...lead,
+            ...(base
+              ? [
+                  {
+                    slot: 'system-prompt' as const,
+                    label: 'System prompt',
+                    text: base,
+                  },
+                ]
+              : []),
+            ...rest,
+          ]
+        })()
+
+    return {
+      character,
+      roleplay,
+      systemSections,
+      atDepth: injections.atDepth,
+      activated,
+    }
+  }
+
+  /**
    * [ATTACHED_FILES] blocks stay on the user message that carries them (see
    * fileMetadata.ts injectFilesIntoPrompt) so the model reads file_ids in the
    * turn they belong to. Only a static, file-independent instruction is added
@@ -1673,3 +2137,4 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
     })
   }
 }
+

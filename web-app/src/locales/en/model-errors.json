@@ -22,9 +22,9 @@
     "GPU_DRIVER_TOO_OLD": "Your GPU driver is too old for this engine. Updating the driver, or switching to the CPU engine in Settings, will fix this.",
     "OUT_OF_MEMORY": "There is not enough memory to run this model. A smaller model or a smaller context size usually helps.",
     "INVALID_ARGUMENT": "One of the model's settings is not valid.",
-    "DEVICE_LIST_PARSE_FAILED": "Jan could not read the list of available devices from the engine.",
+    "DEVICE_LIST_PARSE_FAILED": "Kuru could not read the list of available devices from the engine.",
     "IO_ERROR": "A file could not be read or written while starting the model.",
-    "INTERNAL_ERROR": "Something went wrong inside Jan while starting the model."
+    "INTERNAL_ERROR": "Something went wrong inside Kuru while starting the model."
   },
   "engineMissingLibraries": "Missing: {{libraries}}",
   "startModelFailed": "Failed to start model: {{reason}}",

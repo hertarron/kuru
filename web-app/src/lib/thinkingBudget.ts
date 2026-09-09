@@ -9,15 +9,18 @@ export type ThinkingBudgetLevelKey =
 // sentinel for "don't cap reasoning"). Resolved against the LIVE (post-fit)
 // context size at send time, not the configured/default size at selection
 // time, since llama.cpp's --fit can pick a runtime n_ctx far from either.
+// Calibrated for roleplay: responses are short (~100-500 tokens), so even the
+// lowest level must stay small — at 32k context, low = 1.6k thinking tokens,
+// already several times the response length.
 export const THINKING_BUDGET_LEVELS: Array<{
   key: ThinkingBudgetLevelKey
   label: string
   ratio: number | null
 }> = [
-  { key: 'low', label: 'Low', ratio: 0.1 },
-  { key: 'medium', label: 'Medium', ratio: 0.25 },
-  { key: 'high', label: 'High', ratio: 0.5 },
-  { key: 'xhigh', label: 'XHigh', ratio: 0.75 },
+  { key: 'low', label: 'Low', ratio: 0.05 },
+  { key: 'medium', label: 'Medium', ratio: 0.1 },
+  { key: 'high', label: 'High', ratio: 0.2 },
+  { key: 'xhigh', label: 'XHigh', ratio: 0.35 },
   { key: 'unlimited', label: 'Unlimited', ratio: null },
 ]
 

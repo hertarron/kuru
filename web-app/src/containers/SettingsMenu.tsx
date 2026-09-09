@@ -4,6 +4,8 @@ import { useTranslation } from '@/i18n/react-i18next-compat'
 import { useState, useEffect, useCallback } from 'react'
 import {
   IconAdjustmentsHorizontal,
+  IconBook,
+  IconBrain,
   IconCircles,
   IconChevronDown,
   IconChevronRight,
@@ -12,11 +14,11 @@ import {
   IconPalette,
   IconPlus,
   IconTopologyStar3,
-  IconLock,
   IconCpu,
   IconWorld,
   IconWorldSearch,
   IconPaperclip,
+  IconUserCircle,
 } from '@tabler/icons-react'
 import { useMatches, useNavigate } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
@@ -177,7 +179,14 @@ const SettingsMenu = () => {
       route: route.settings.interface,
       icon: IconPalette,
     },
-    { title: 'common:assistants', route: route.settings.assistant, icon: IconFeather },
+    { title: 'common:characters', route: route.settings.characters, icon: IconFeather },
+    { title: 'Lorebooks', route: route.settings.lorebooks, icon: IconBook },
+    { title: 'Memory', route: route.settings.memory, icon: IconBrain },
+    {
+      title: 'Personas',
+      route: route.settings.personas,
+      icon: IconUserCircle,
+    },
     {
       title: 'common:attachments',
       route: route.settings.attachments,
@@ -210,7 +219,6 @@ const SettingsMenu = () => {
       isEnabled: true,
       icon: IconCpu,
     },
-    { title: 'common:privacy', route: route.settings.privacy, icon: IconLock },
   ]
 
   const integrationSettings = [
@@ -364,3 +372,4 @@ const SettingsMenu = () => {
 }
 
 export default SettingsMenu
+

@@ -52,11 +52,17 @@ vi.mock('@/hooks/useHardware', () => ({
       cpu: { name: 'Intel i7', arch: 'x64', core_count: 8, extensions: ['SSE'] },
       total_memory: 16384,
     },
-    systemUsage: { cpu: 50, used_memory: 8192 },
+    systemUsage: { cpu: 50, used_memory: 8192, gpus: [] },
     setHardwareData: vi.fn(),
     updateSystemUsage: vi.fn(),
     pollingPaused: false,
+    gpuReserveMiB: {},
+    setGpuReserve: vi.fn(),
   }),
+  isDisplayGpu: () => false,
+  gpuMemoryUsage: () => undefined,
+  resolveGpuReserveMiB: () => 0,
+  DEFAULT_DISPLAY_GPU_RESERVE_MIB: 512,
 }))
 
 vi.mock('@/hooks/useLlamacppDevices', () => ({

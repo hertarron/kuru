@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   HoverCard,
   HoverCardContent,
@@ -76,6 +77,17 @@ export const ModelInfoHoverCard = ({
   children,
 }: ModelInfoHoverCardProps) => {
   const hardwareData = useHardware((s) => s.hardwareData)
+  const [open, setOpen] = useState(false)
+
+  // Clicking the card opens a sheet over the grid, but the pointer never
+  // leaves the trigger, so an uncontrolled hover card hangs above the sheet
+  // until its own timer closes it. Any pointer press dismisses it instead.
+  useEffect(() => {
+    if (!open) return
+    const dismiss = () => setOpen(false)
+    document.addEventListener('pointerdown', dismiss, true)
+    return () => document.removeEventListener('pointerdown', dismiss, true)
+  }, [open])
 
   const displayVariant = model.is_mlx
     ? undefined
@@ -108,7 +120,7 @@ export const ModelInfoHoverCard = ({
   )
 
   return (
-    <HoverCard openDelay={150}>
+    <HoverCard open={open} onOpenChange={setOpen} openDelay={150}>
       <HoverCardTrigger asChild>{trigger}</HoverCardTrigger>
       <HoverCardContent className="w-80 p-4" side="left">
         <div className="space-y-4">

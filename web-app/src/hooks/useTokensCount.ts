@@ -7,6 +7,7 @@ import {
 } from '@/lib/llamacppRouterProps'
 import { useModelProvider } from './useModelProvider'
 import { useAppState } from './useAppState'
+import { useActiveMessagePath } from './useActiveMessagePath'
 
 export type ModelProps = LlamacppModelProps
 
@@ -69,6 +70,10 @@ const readSettingNumber = (v: unknown): number | undefined => {
 export const useTokensCount = (messages: ThreadMessage[] = []) => {
   const { selectedModel, selectedProvider, getProviderByName } =
     useModelProvider()
+  // Regenerating leaves both replies in the store. Only the active branch was
+  // ever sent, so only its usage describes what is in context — and flipping
+  // branches has to move the counter with it.
+  const activeMessages = useActiveMessagePath(messages)
   const [modelProps, setModelProps] = useState<ModelProps | undefined>(
     undefined
   )
@@ -132,7 +137,7 @@ export const useTokensCount = (messages: ThreadMessage[] = []) => {
           fitEnabled: false,
         }
       }
-      const usage = getLatestServerUsage(messages)
+      const usage = getLatestServerUsage(activeMessages)
       return {
         tokenCount: usage.totalTokens ?? 0,
         inputTokens: usage.inputTokens,
@@ -151,14 +156,14 @@ export const useTokensCount = (messages: ThreadMessage[] = []) => {
         fitEnabled: false,
       }
     }
-    const overflow = getActiveContextOverflow(messages)
+    const overflow = getActiveContextOverflow(activeMessages)
     const usage = liveStats
       ? {
           inputTokens: liveStats.promptTokens,
           outputTokens: liveStats.completionTokens,
           totalTokens: liveStats.promptTokens + liveStats.completionTokens,
         }
-      : getLatestServerUsage(messages)
+      : getLatestServerUsage(activeMessages)
     const tokenCount = overflow?.requestTokens ?? usage.totalTokens ?? 0
     const maxTokens = overflow?.contextTokens ?? modelProps?.nCtx
     const percentage = maxTokens ? (tokenCount / maxTokens) * 100 : undefined
@@ -195,7 +200,7 @@ export const useTokensCount = (messages: ThreadMessage[] = []) => {
       isOverflow: overflow != null,
     }
   }, [
-    messages,
+    activeMessages,
     modelId,
     selectedProvider,
     isLocalProvider,

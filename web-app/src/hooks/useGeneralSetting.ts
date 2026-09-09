@@ -6,19 +6,33 @@ import { getServiceHub } from '@/hooks/useServiceHub'
 import { ExtensionManager } from '@/lib/extension'
 
 export const HUGGINGFACE_TOKEN_SECRET_KEY = 'huggingface'
+export const CHUB_TOKEN_SECRET_KEY = 'chub'
 type GeneralSettingState = {
   currentLanguage: Language
   spellCheckChatInput: boolean
   tokenCounterCompact: boolean
   autoUpdateCheck: boolean
   stripReasoningFromContext: boolean
+  /**
+   * Legacy single-persona name. Kept only as the migration source for the
+   * persona library (see `migrateUserNameToPersona`); prompts read the active
+   * persona now, never this.
+   */
+  userName: string
+  /** Library persona used by chats that haven't overridden it. */
+  activePersonaId?: string
+  setActivePersonaId: (id: string | undefined) => void
   huggingfaceToken?: string
   setHuggingfaceToken: (token: string) => void
+  /** Chub.ai API token — unlocks NSFW/private character listings. */
+  chubToken?: string
+  setChubToken: (token: string) => void
   setSpellCheckChatInput: (value: boolean) => void
   setTokenCounterCompact: (value: boolean) => void
   setAutoUpdateCheck: (value: boolean) => void
   setStripReasoningFromContext: (value: boolean) => void
   setCurrentLanguage: (value: Language) => void
+  setUserName: (value: string) => void
 }
 
 export const useGeneralSetting = create<GeneralSettingState>()(
@@ -29,13 +43,28 @@ export const useGeneralSetting = create<GeneralSettingState>()(
       tokenCounterCompact: true,
       autoUpdateCheck: true,
       stripReasoningFromContext: false,
+      userName: '',
+      activePersonaId: undefined,
       huggingfaceToken: undefined,
+      chubToken: undefined,
+      setChubToken: (token) => {
+        set({ chubToken: token })
+        // Canonical secret store is the OS keyring, not settings storage.
+        getServiceHub()
+          .core()
+          .invoke('set_secret', { key: CHUB_TOKEN_SECRET_KEY, value: token })
+          .catch((err) =>
+            console.warn('Failed to persist chub token to keyring:', err)
+          )
+      },
       setSpellCheckChatInput: (value) => set({ spellCheckChatInput: value }),
       setTokenCounterCompact: (value) => set({ tokenCounterCompact: value }),
       setAutoUpdateCheck: (value) => set({ autoUpdateCheck: value }),
       setStripReasoningFromContext: (value) =>
         set({ stripReasoningFromContext: value }),
       setCurrentLanguage: (value) => set({ currentLanguage: value }),
+      setUserName: (value) => set({ userName: value }),
+      setActivePersonaId: (id) => set({ activePersonaId: id }),
       setHuggingfaceToken: (token) => {
         set({ huggingfaceToken: token })
         // Canonical secret store is the OS keyring, not settings storage.
@@ -73,13 +102,15 @@ export const useGeneralSetting = create<GeneralSettingState>()(
       name: localStorageKey.settingGeneral,
       storage: createJSONStorage(() => backendStorage),
       skipHydration: true,
-      // huggingfaceToken is a secret — kept in the OS keyring, never persisted here.
+      // huggingfaceToken and chubToken are secrets — kept in the OS keyring, never persisted here.
       partialize: (state) => ({
         currentLanguage: state.currentLanguage,
         spellCheckChatInput: state.spellCheckChatInput,
         tokenCounterCompact: state.tokenCounterCompact,
         autoUpdateCheck: state.autoUpdateCheck,
         stripReasoningFromContext: state.stripReasoningFromContext,
+        userName: state.userName,
+        activePersonaId: state.activePersonaId,
       }),
     }
   )

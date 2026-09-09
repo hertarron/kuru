@@ -181,6 +181,10 @@ const normalizeLatex = (input: string): string => {
 
   s = maskInlineMath(s, math)
   s = s.replace(/\$(?=\d)/g, '\\$') // leftover currency renders literally
+  // Drop lines that are nothing but a bare HTML tag (e.g. RP cards wrapping
+  // stat sheets in <stats>…</stats>). Raw HTML isn't rendered by this
+  // pipeline, so these would otherwise show as literal text.
+  s = s.replace(/^[ \t]*<\/?[A-Za-z][A-Za-z0-9_-]*\/?>[ \t]*$/gm, '')
   s = fixEmphasisFlanking(s)
 
   // Restore math, converting bracket delimiters to $… / $$… for remark-math.
@@ -190,7 +194,14 @@ const normalizeLatex = (input: string): string => {
     if (expr.startsWith('\\(')) return `$${expr.slice(2, -2).trim()}$`
     return expr
   })
-  s = s.replace(/\uE000C(\d+)\uE000/g, (_, n) => code[Number(n)])
+  s = s.replace(/\uE000C(\d+)\uE000/g, (_, n) => {
+    const block = code[Number(n)]
+    // Fenced blocks get blank-line padding: directly under a bare HTML tag
+    // line (e.g. RP cards wrapping stat sheets in <stats>…</stats>) the
+    // fence would otherwise be absorbed into a CommonMark HTML block and
+    // vanish from the parsed output. Inline code must stay unpadded.
+    return block.startsWith('```') ? `\n\n${block}\n\n` : block
+  })
 
   if (latexCache.size > 100) {
     const firstKey = latexCache.keys().next().value || ''

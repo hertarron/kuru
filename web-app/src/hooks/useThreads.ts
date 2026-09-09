@@ -8,6 +8,7 @@ import { ExtensionManager } from '@/lib/extension'
 import { ExtensionTypeEnum, VectorDBExtension } from '@janhq/core'
 import { useChatSessions } from '@/stores/chat-session-store'
 import { useAppState } from '@/hooks/useAppState'
+import { useThreadMemory } from '@/hooks/useThreadMemory'
 
 type ThreadState = {
   threads: Record<string, Thread>
@@ -34,7 +35,7 @@ type ThreadState = {
   ) => Promise<Thread>
   updateCurrentThreadModel: (model: ThreadModel) => void
   getFilteredThreads: (searchTerm: string) => Thread[]
-  updateCurrentThreadAssistant: (assistant: Assistant) => void
+  updateCurrentThreadCharacter: (character?: Character | Assistant) => void
   updateThreadTimestamp: (threadId: string) => void
   updateThread: (threadId: string, updates: Partial<Thread>) => void
   deleteAllThreadsByProject: (projectId: string) => void
@@ -164,6 +165,7 @@ export const useThreads = create<ThreadState>()((set, get) => ({
       useAgentMode.getState().removeThread(threadId)
       useChatSessions.getState().removeSession(threadId)
       useAppState.getState().clearThreadState(threadId)
+      useThreadMemory.getState().clearThread(threadId)
       cleanupVectorDB(threadId)
       getServiceHub().threads().deleteThread(threadId)
 
@@ -201,6 +203,7 @@ export const useThreads = create<ThreadState>()((set, get) => ({
       // Delete threads and clean up their vector DB collections
       threadsToDeleteIds.forEach((threadId) => {
         cleanupVectorDB(threadId)
+        useThreadMemory.getState().clearThread(threadId)
         getServiceHub().threads().deleteThread(threadId)
       })
 
@@ -237,6 +240,7 @@ export const useThreads = create<ThreadState>()((set, get) => ({
         cleanupVectorDB(threadId)
         getServiceHub().threads().deleteThread(threadId)
       })
+      useThreadMemory.getState().clearAll()
 
       return {
         threads: {},
@@ -260,6 +264,7 @@ export const useThreads = create<ThreadState>()((set, get) => ({
       threadsToDeleteIds.forEach((threadId) => {
         useChatSessions.getState().removeSession(threadId)
         useAppState.getState().clearThreadState(threadId)
+        useThreadMemory.getState().clearThread(threadId)
         cleanupVectorDB(threadId)
         getServiceHub().threads().deleteThread(threadId)
       })
@@ -359,7 +364,7 @@ export const useThreads = create<ThreadState>()((set, get) => ({
         return createdThread
       })
   },
-  updateCurrentThreadAssistant: (assistant) => {
+  updateCurrentThreadCharacter: (character) => {
     set((state) => {
       if (!state.currentThreadId) return { ...state }
       const currentThread = state.getCurrentThread()
@@ -368,15 +373,17 @@ export const useThreads = create<ThreadState>()((set, get) => ({
           .threads()
           .updateThread({
             ...currentThread,
-            assistants: assistant ? [{ ...assistant, model: currentThread.model }] : [],
+            assistants: character
+              ? [{ ...character, model: currentThread.model }]
+              : [],
           })
       return {
         threads: {
           ...state.threads,
           [state.currentThreadId as string]: {
             ...state.threads[state.currentThreadId as string],
-            assistants: assistant
-              ? [{ ...assistant, model: currentThread?.model }]
+            assistants: character
+              ? [{ ...character, model: currentThread?.model }]
               : [],
             updated: Date.now() / 1000,
           },
@@ -487,3 +494,4 @@ export const useThreads = create<ThreadState>()((set, get) => ({
     })
   },
 }))
+

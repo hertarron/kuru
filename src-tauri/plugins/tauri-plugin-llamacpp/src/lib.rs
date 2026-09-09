@@ -6,6 +6,7 @@ use tauri::{
 };
 
 mod backend;
+pub mod calibrate;
 pub mod cleanup;
 pub mod deps_analyzer;
 mod commands;
@@ -36,6 +37,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             commands::router_slots_idle,
             commands::router_health,
             commands::adopt_router,
+            calibrate::calibrate_model,
+            calibrate::cancel_calibrate,
             backend::fetch_backend_checksums,
             backend::verify_file_sha512,
             commands::get_devices,

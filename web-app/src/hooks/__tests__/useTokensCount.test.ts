@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { ThreadMessage } from '@janhq/core'
 import { useTokensCount } from '../useTokensCount'
 import { useAppState } from '../useAppState'
+import { useThreads } from '../useThreads'
 
 const mockGetModelProps = vi.fn()
 
@@ -190,6 +191,87 @@ describe('useTokensCount', () => {
     const { result } = renderHook(() => useTokensCount(messages))
     expect(result.current.tokenCount).toBe(0)
     expect(result.current.percentage).toBeUndefined()
+  })
+
+  // Regression: regenerating leaves both replies in the store as siblings.
+  // Reading usage off the raw list picked whichever was created last, so the
+  // counter reported the wrong branch and only corrected itself on the next
+  // send.
+  it('reads usage from the active branch, not the newest sibling', async () => {
+    const user = makeMessage({
+      id: 'u1',
+      role: 'user',
+      created_at: 1,
+      metadata: { parentId: null, activeChildId: 'a2' },
+    })
+    const branch = (id: string, total: number, created: number) =>
+      makeMessage({
+        id,
+        created_at: created,
+        metadata: {
+          parentId: 'u1',
+          usage: { inputTokens: total - 5, outputTokens: 5, totalTokens: total },
+        },
+      })
+    const messages = [user, branch('a1', 100, 2), branch('a2', 200, 3)]
+
+    const { result } = renderHook(() => useTokensCount(messages))
+    await waitFor(() => expect(result.current.modelProps).toBeDefined())
+    expect(result.current.tokenCount).toBe(200)
+
+    const switched = [
+      { ...user, metadata: { parentId: null, activeChildId: 'a1' } },
+      messages[1],
+      messages[2],
+    ] as ThreadMessage[]
+    const { result: after } = renderHook(() => useTokensCount(switched))
+    await waitFor(() => expect(after.current.modelProps).toBeDefined())
+    expect(after.current.tokenCount).toBe(100)
+  })
+
+  // Regression: greeting variants are root-level siblings, so a thread can hold
+  // two whole conversations. The counter has to follow the thread's active root
+  // rather than whichever tree was written to last.
+  it('follows the active root when a thread has two trees', async () => {
+    const node = (
+      id: string,
+      created: number,
+      metadata: Record<string, unknown>
+    ) => makeMessage({ id, created_at: created, metadata })
+    const messages = [
+      node('g1', 1, { parentId: null, activeChildId: 'u1' }),
+      node('u1', 2, { parentId: 'g1', activeChildId: 'a1' }),
+      node('a1', 3, {
+        parentId: 'u1',
+        usage: { inputTokens: 290, outputTokens: 10, totalTokens: 300 },
+      }),
+      node('g2', 4, { parentId: null, activeChildId: 'u2' }),
+      node('u2', 5, { parentId: 'g2', activeChildId: 'a2' }),
+      node('a2', 6, {
+        parentId: 'u2',
+        usage: { inputTokens: 690, outputTokens: 10, totalTokens: 700 },
+      }),
+    ]
+    const setActiveRoot = (activeRootId: string) =>
+      act(() => {
+        useThreads.setState({
+          threads: {
+            'thread-1': {
+              id: 'thread-1',
+              metadata: { activeRootId },
+            } as never,
+          },
+        })
+      })
+
+    setActiveRoot('g1')
+    const { result, rerender } = renderHook(() => useTokensCount(messages))
+    await waitFor(() => expect(result.current.modelProps).toBeDefined())
+    expect(result.current.tokenCount).toBe(300)
+
+    setActiveRoot('g2')
+    rerender()
+    expect(result.current.tokenCount).toBe(700)
   })
 
   it('context overflow still works when there are no live stats at all', async () => {

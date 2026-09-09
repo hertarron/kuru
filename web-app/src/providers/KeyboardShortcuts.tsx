@@ -6,7 +6,7 @@ import { useRouter } from '@tanstack/react-router'
 import { route } from '@/constants/routes'
 import { PlatformShortcuts, ShortcutAction } from '@/lib/shortcuts'
 import { useAgentMode } from '@/hooks/useAgentMode'
-import { useAssistantSwitcher } from '@/hooks/useAssistantSwitcher'
+import { useCharacterSwitcher } from '@/hooks/useCharacterSwitcher'
 import { useMessageZoom } from '@/hooks/useMessageZoom'
 import { TEMPORARY_CHAT_ID } from '@/constants/chat'
 
@@ -79,7 +79,7 @@ export function KeyboardShortcutsProvider() {
   useKeyboardShortcut({
     ...switchAssistantShortcut,
     callback: () => {
-      useAssistantSwitcher.getState().cycleHandler?.()
+      useCharacterSwitcher.getState().cycleHandler?.()
     },
   })
 
@@ -89,3 +89,4 @@ export function KeyboardShortcutsProvider() {
   // This component doesn't render anything
   return null
 }
+

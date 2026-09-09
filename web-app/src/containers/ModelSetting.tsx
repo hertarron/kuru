@@ -1,4 +1,4 @@
-import { IconSettings } from '@tabler/icons-react'
+import { IconChevronRight, IconSettings } from '@tabler/icons-react'
 import debounce from 'lodash.debounce'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -13,6 +13,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import { ContextPlanPanel } from '@/containers/ContextPlanPanel'
 import { DynamicControllerSetting } from '@/containers/dynamicControllerSetting'
 import { SamplerDefaults } from '@/containers/SamplerDefaults'
 import { ChatTemplateKwargs } from '@/containers/ChatTemplateKwargs'
@@ -24,6 +30,44 @@ import { useAppState } from '@/hooks/useAppState'
 import { paramsSettings, samplerKeysForProvider } from '@/lib/predefinedParams'
 
 const MTP_MIN_BUILD = 9193
+
+/** Surfaced by the planner panel, so never repeated in Advanced. */
+const PLANNER_PANEL_KEYS = [
+  'ctx_len',
+  'cache_type_k',
+  'cache_type_v',
+  'batch_size',
+  'ubatch_size',
+  'device',
+  'tensor_split',
+  'split_mode',
+]
+
+/** Settings the context planner writes. Editing one by hand turns it off. */
+const PLANNER_OWNED_KEYS = [
+  'ngl',
+  'override_tensor_buffer_t',
+  'cpu_moe',
+  'n_cpu_moe',
+]
+
+/** Settings llama.cpp only reads at load, so a running model must restart. */
+const RESTART_ON_CHANGE_KEYS = [
+  'ctx_len',
+  'ngl',
+  'chat_template',
+  'offload_mmproj',
+  'batch_size',
+  'ubatch_size',
+  'cpu_moe',
+  'n_cpu_moe',
+  'cache_type_k',
+  'cache_type_v',
+  'flash_attn',
+  'override_tensor_buffer_t',
+  'device',
+  'tensor_split',
+]
 
 function parseBuildNumber(version: unknown): number | null {
   if (typeof version !== 'string') return null
@@ -138,23 +182,30 @@ export function ModelSetting({
   const handleSettingChange = (
     key: string,
     value: string | boolean | number
+  ) => handleSettingsChange({ [key]: value })
+
+  /**
+   * Applies several settings as one update. The planner writes context and
+   * placement together, and one key at a time would drop all but the last:
+   * each write spreads `model.settings` as it was when the handler was made.
+   */
+  const handleSettingsChange = (
+    patch: Record<string, string | boolean | number>
   ) => {
     if (!provider) return
 
-    // Create a copy of the model with updated settings
-    const updatedModel = {
-      ...model,
-      settings: {
-        ...model.settings,
-        [key]: {
-          ...(model.settings?.[key] != null ? model.settings?.[key] : {}),
-          controller_props: {
-            ...(model.settings?.[key]?.controller_props ?? {}),
-            value: value,
-          },
+    const updatedSettings = { ...model.settings }
+    for (const [key, value] of Object.entries(patch)) {
+      updatedSettings[key] = {
+        key,
+        ...(model.settings?.[key] != null ? model.settings?.[key] : {}),
+        controller_props: {
+          ...(model.settings?.[key]?.controller_props ?? {}),
+          value: value,
         },
-      },
+      } as ProviderSetting
     }
+    const updatedModel = { ...model, settings: updatedSettings }
 
     // Find the model index in the provider's models array
     const modelIndex = provider.models.findIndex((m) => m.id === model.id)
@@ -174,13 +225,9 @@ export function ModelSetting({
       // Call debounced stopModel only when updating settings that require restart,
       // and only if the model is currently running
       if (
-        key === 'ctx_len' ||
-        key === 'ngl' ||
-        key === 'chat_template' ||
-        key === 'offload_mmproj' ||
-        key === 'batch_size' ||
-        key === 'cpu_moe' ||
-        key === 'n_cpu_moe'
+        Object.keys(patch).some((key) =>
+          RESTART_ON_CHANGE_KEYS.includes(key)
+        )
       ) {
         // Check if model is running before stopping it
         serviceHub
@@ -198,7 +245,7 @@ export function ModelSetting({
       // mappable keys to disk + restart the router so the next load uses the
       // new args. Non-mappable keys are filtered inside the extension.
       if (provider.provider === 'llamacpp') {
-        debouncedPersistModelSettings(model.id, { [key]: value }, model.settings)
+        debouncedPersistModelSettings(model.id, patch, model.settings)
       }
     }
   }
@@ -234,6 +281,51 @@ export function ModelSetting({
     updateProvider(provider.provider, { models: updatedModels })
   }
 
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+
+  const planManual =
+    model.settings?.plan_manual?.controller_props?.value === true
+
+  const handleAdvancedChange = (
+    key: string,
+    value: string | boolean | number
+  ) => {
+    if (!planManual && PLANNER_OWNED_KEYS.includes(key)) {
+      handleSettingsChange({ [key]: value, plan_manual: true })
+      return
+    }
+    handleSettingChange(key, value)
+  }
+
+  const plannerActive =
+    provider.provider === 'llamacpp' && model.embedding !== true
+
+  // llama.cpp needs flash attention for a quantized V cache. While one is
+  // selected the Off switch is unavailable, with the reason on the wrapper
+  // (the same treatment `DynamicControllerSetting` gives `disabledReason`).
+  const effectiveCacheTypeV =
+    (model.settings?.cache_type_v?.controller_props?.value as
+      | string
+      | undefined) ??
+    (provider.settings?.find((s) => s.key === 'cache_type_v')
+      ?.controller_props?.value as string | undefined) ??
+    'f16'
+  const flashOffBlocked = effectiveCacheTypeV !== 'f16'
+  const flashOffReason =
+    'A quantized K/V cache needs Flash Attention on. Return to fp16 to turn it off.'
+
+  // Kuru Fit is opt-out: installs predating the key behave as fitted.
+  // Legacy mode restores stock Jan fitting and strips every Kuru behavior.
+  const kuruMode =
+    provider.provider !== 'llamacpp' ||
+    provider.settings?.find((s) => s.key === 'kuru_fit')?.controller_props
+      ?.value !== false
+
+  const fitEnabled =
+    provider.settings?.find((s) => s.key === 'fit')?.controller_props
+      ?.value === true
+  const fitCtxSetting = provider.settings?.find((s) => s.key === 'fit_ctx')
+
   const handleEngineSettingChange = (
     key: string,
     value: string | boolean | number
@@ -250,11 +342,6 @@ export function ModelSetting({
     serviceHub.providers().updateSettings(provider.provider, newSettings)
     updateProvider(provider.provider, { settings: newSettings })
   }
-
-  const fitEnabled =
-    provider.settings?.find((s) => s.key === 'fit')?.controller_props?.value ===
-    true
-  const fitCtxSetting = provider.settings?.find((s) => s.key === 'fit_ctx')
 
   return (
     <Sheet>
@@ -293,11 +380,27 @@ export function ModelSetting({
                 onChange={handleSettingChange}
               />
             )}
-          {fitEnabled && fitCtxSetting && (
-            <div key="fit_ctx" className="space-y-2">
-              <div className="flex items-start justify-between gap-8">
-                <div className="mb-1 truncate">
-                  <span title={fitCtxSetting.title} className="font-medium">
+          {provider.provider === 'llamacpp' &&
+            model.embedding !== true &&
+            kuruMode && (
+              <ContextPlanPanel
+                model={model}
+                manual={planManual}
+                onChange={handleSettingsChange}
+                onResume={() => handleSettingChange('plan_manual', false)}
+              />
+            )}
+          {provider.provider === 'llamacpp' &&
+            model.embedding !== true &&
+            !kuruMode &&
+            fitEnabled &&
+            fitCtxSetting && (
+              <div key="fit_ctx" className="space-y-2">
+                <div>
+                  <span
+                    title={fitCtxSetting.title}
+                    className="font-medium"
+                  >
                     {fitCtxSetting.title}
                   </span>
                 </div>
@@ -311,12 +414,83 @@ export function ModelSetting({
                     handleEngineSettingChange('fit_ctx', newValue)
                   }
                 />
+                <p className="text-muted-foreground leading-normal text-xs">
+                  {fitCtxSetting.description}
+                </p>
               </div>
-              <p className="text-muted-foreground leading-normal text-xs">
-                {fitCtxSetting.description}
-              </p>
-            </div>
-          )}
+            )}
+          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+            <CollapsibleTrigger className="flex w-full items-center gap-2 rounded py-1 text-left font-medium hover:bg-secondary/50">
+              <IconChevronRight
+                size={14}
+                className={cn('transition-transform', advancedOpen && 'rotate-90')}
+              />
+              Advanced
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-8 pt-4">
+          {provider.provider === 'llamacpp' &&
+            model.embedding !== true &&
+            kuruMode && (
+              <div className="space-y-3">
+                <div>
+                  <span className="font-medium">Flash Attention</span>
+                  <p className="text-muted-foreground leading-normal text-xs">
+                    Faster attention kernels using less memory. Auto decides
+                    per load; a measured model re-measures on change.
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {(
+                    [
+                      { value: 'auto', label: 'Auto' },
+                      { value: 'on', label: 'On' },
+                      { value: 'off', label: 'Off' },
+                    ] as const
+                  ).map((mode) =>
+                    mode.value === 'off' && flashOffBlocked ? (
+                      <div
+                        key={mode.value}
+                        className="opacity-50 pointer-events-none select-none"
+                        title={flashOffReason}
+                        aria-disabled
+                      >
+                        <Button
+                          size="sm"
+                          className="w-full"
+                          variant={
+                            (
+                              (model.settings?.flash_attn?.controller_props
+                                ?.value as string) || 'auto'
+                            ) === mode.value
+                              ? 'default'
+                              : 'ghost'
+                          }
+                          disabled
+                        >
+                          {mode.label}
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        key={mode.value}
+                        size="sm"
+                        variant={
+                          (
+                            (model.settings?.flash_attn?.controller_props
+                              ?.value as string) || 'auto'
+                          ) === mode.value
+                            ? 'default'
+                            : 'ghost'
+                        }
+                        onClick={() => handleSettingChange('flash_attn', mode.value)}
+                      >
+                        {mode.label}
+                      </Button>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
           {(() => {
             return Object.entries(model.settings || {})
           .reduce<[string, unknown][]>((acc, entry) => {
@@ -326,7 +500,27 @@ export function ModelSetting({
             // Removed in v15 migration; defend against any pre-migration
             // localStorage state that still carries the orphan entry.
             if (entry[0] === 'auto_increase_ctx_len') return acc
-            if (fitEnabled && entry[0] === 'ctx_len') return acc
+            // Stock Jan fitting owns context sizing and GPU layers, so the
+            // request field has nowhere to live while it is on.
+            if (!kuruMode && fitEnabled && entry[0] === 'ctx_len') return acc
+            // Owned by the context planner panel above. The layer counts stay
+            // here in every mode: editing one takes manual control (see
+            // handleAdvancedChange), which is the only door into it.
+            if (kuruMode && plannerActive && PLANNER_PANEL_KEYS.includes(entry[0])) return acc
+            if (entry[0] === 'plan_manual') return acc
+            // Planner-written keys arrive as bare {key, controller_props}
+            // entries with no title or control, and would render as an
+            // unlabelled switch. In manual mode they still need controls,
+            // so the map below infers the obvious one from the stored value.
+            if (
+              !(entry[1] as ProviderSetting)?.controller_type &&
+              !(
+                kuruMode &&
+                planManual &&
+                PLANNER_OWNED_KEYS.includes(entry[0])
+              )
+            )
+              return acc
             // Sampling params live in the composer popover, not the sidebar.
             if (entry[0] in paramsSettings) return acc
             acc.push(entry)
@@ -340,7 +534,35 @@ export function ModelSetting({
             return true
           })
           .map(([key, value]) => {
-            const config = value as ProviderSetting
+            const raw = value as ProviderSetting
+            // Bare planner-written keys get an inferred control in manual
+            // mode (see the filter above); anywhere else they stay hidden.
+            const storedValue = (
+              raw as {
+                controller_props?: { value?: unknown }
+              }
+            )?.controller_props?.value
+            const config: ProviderSetting =
+              raw?.controller_type
+                ? raw
+                : ({
+                    key,
+                    title: key,
+                    controller_type:
+                      typeof storedValue === 'boolean'
+                        ? 'checkbox'
+                        : 'input',
+                    controller_props: {
+                      ...(typeof storedValue === 'number'
+                        ? { type: 'number' }
+                        : {}),
+                      value: storedValue,
+                    },
+                  } as ProviderSetting)
+            const takesManual =
+              kuruMode &&
+              !planManual &&
+              PLANNER_OWNED_KEYS.includes(key)
             return (
               <div key={key} className="space-y-2">
                 <div
@@ -361,7 +583,7 @@ export function ModelSetting({
                     description={config.description}
                     controllerType={config.controller_type}
                     disabledReason={
-                      fitEnabled && key === 'ngl'
+                      !kuruMode && fitEnabled && key === 'ngl'
                         ? t('common:modelSettings.nglDisabledByFit')
                         : undefined
                     }
@@ -369,16 +591,20 @@ export function ModelSetting({
                       ...config.controller_props,
                       value: config.controller_props?.value,
                     }}
-                    onChange={(newValue) => handleSettingChange(key, newValue)}
+                    onChange={(newValue) => handleAdvancedChange(key, newValue)}
                   />
                 </div>
                 <p className="text-muted-foreground leading-normal text-xs">
                   {config.description}
+                  {takesManual &&
+                    ' Editing takes manual control of placement.'}
                 </p>
               </div>
             )
           })
           })()}
+            </CollapsibleContent>
+          </Collapsible>
         </div>
       </SheetContent>
     </Sheet>

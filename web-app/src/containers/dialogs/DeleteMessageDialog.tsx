@@ -15,9 +15,17 @@ import { IconTrash } from '@tabler/icons-react'
 
 interface DeleteMessageDialogProps {
   onDelete: () => void
+  /**
+   * True when the target is a user turn: pair-delete also removes the
+   * assistant replies directly below it.
+   */
+  deletesReply?: boolean
 }
 
-export function DeleteMessageDialog({ onDelete }: DeleteMessageDialogProps) {
+export function DeleteMessageDialog({
+  onDelete,
+  deletesReply,
+}: DeleteMessageDialogProps) {
   const { t } = useTranslation()
   const [isOpen, setIsOpen] = useState(false)
   const deleteButtonRef = useRef<HTMLButtonElement>(null)
@@ -39,6 +47,7 @@ export function DeleteMessageDialog({ onDelete }: DeleteMessageDialogProps) {
       size="icon-xs"
       role="button"
       tabIndex={0}
+      title={t('chat:actions.delete')}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
@@ -64,6 +73,8 @@ export function DeleteMessageDialog({ onDelete }: DeleteMessageDialogProps) {
           <DialogDescription>
             Are you sure you want to delete this message? This action cannot be
             undone.
+            {deletesReply &&
+              ' The assistant reply to this message will also be deleted.'}
           </DialogDescription>
           <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <DialogClose asChild>

@@ -74,13 +74,13 @@ function Shortcuts() {
   const { t } = useTranslation()
 
   return (
-    <div className="flex flex-col h-svh w-full">
-      <HeaderPage>
+    <div className="flex flex-col h-full w-full">
+      <HeaderPage className="h-auto pt-[calc(var(--spacing)*1.7)] pb-[calc(var(--spacing)*2.5)]">
         <div className="flex items-center gap-2 w-full">
           <span className='font-medium text-base font-studio'>{t('common:settings')}</span>
         </div>
       </HeaderPage>
-      <div className="flex h-[calc(100%-60px)]">
+      <div className="flex flex-1 min-h-0">
         <SettingsMenu />
         <div className="p-4 pt-0 w-full overflow-y-auto">
           <div className="flex flex-col justify-between gap-4 gap-y-3 w-full">

@@ -255,9 +255,46 @@ describe('generatePreset kv-unified', () => {
 })
 
 describe('generatePreset ctx-size default', () => {
-  it('emits ctx-size = 8192 in [*] when fit is off and no ctx_size is set', async () => {
+  it("always turns llama.cpp's own fit off, since it overrides ctx-size and ngl", async () => {
     setupModel('llama', {})
-    await generatePreset('/p', '/jan', { fit: false } as any, {
+    await generatePreset('/p', '/jan', {} as any, { supportsMtp: false })
+    expect(writtenFiles['/p/router.preset.ini']).toContain('fit = off')
+  })
+
+  it('leaves fit to the user when Kuru Fit is off (legacy Jan fitting)', async () => {
+    setupModel('llama', {})
+    await generatePreset('/p', '/jan', { kuru_fit: false } as any, {
+      supportsMtp: false,
+    })
+    const ini = writtenFiles['/p/router.preset.ini']
+    // Defaults: fit on (line omitted), no target/ctx lines.
+    expect(ini).not.toContain('fit = off')
+    expect(ini).not.toContain('fit-target')
+    expect(ini).not.toContain('fit-ctx')
+  })
+
+  it('emits legacy fit values when set', async () => {
+    setupModel('llama', {})
+    await generatePreset(
+      '/p',
+      '/jan',
+      {
+        kuru_fit: false,
+        fit: false,
+        fit_target: '512',
+        fit_ctx: 2048,
+      } as any,
+      { supportsMtp: false }
+    )
+    const ini = writtenFiles['/p/router.preset.ini']
+    expect(ini).toContain('fit = off')
+    expect(ini).toContain('fit-target = 512')
+    expect(ini).toContain('fit-ctx = 2048')
+  })
+
+  it('emits ctx-size = 8192 in [*] when no ctx_size is set', async () => {
+    setupModel('llama', {})
+    await generatePreset('/p', '/jan', {} as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
@@ -266,7 +303,7 @@ describe('generatePreset ctx-size default', () => {
 
   it('uses the user ctx_size over the default', async () => {
     setupModel('llama', {})
-    await generatePreset('/p', '/jan', { fit: false, ctx_size: 16384 } as any, {
+    await generatePreset('/p', '/jan', { ctx_size: 16384 } as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
@@ -274,18 +311,9 @@ describe('generatePreset ctx-size default', () => {
     expect(ini).not.toContain('ctx-size = 8192')
   })
 
-  it('omits ctx-size when auto-fit is enabled', async () => {
-    setupModel('llama', {})
-    await generatePreset('/p', '/jan', { fit: true } as any, {
-      supportsMtp: false,
-    })
-    const ini = writtenFiles['/p/router.preset.ini']
-    expect(ini).not.toContain('ctx-size = 8192')
-  })
-
   it('honors an explicit ctx_size = 0 as native instead of the 8192 fallback', async () => {
     setupModel('llama', {})
-    await generatePreset('/p', '/jan', { fit: false, ctx_size: 0 } as any, {
+    await generatePreset('/p', '/jan', { ctx_size: 0 } as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
@@ -295,7 +323,7 @@ describe('generatePreset ctx-size default', () => {
 
   it('honors a per-model ctx_size = 0 override as native', async () => {
     setupModel('llama', { ctx_size: 0 })
-    await generatePreset('/p', '/jan', { fit: false, ctx_size: 16384 } as any, {
+    await generatePreset('/p', '/jan', { ctx_size: 16384 } as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
@@ -305,41 +333,23 @@ describe('generatePreset ctx-size default', () => {
   })
 })
 
-describe('generatePreset n-gpu-layers under fit', () => {
+describe('generatePreset n-gpu-layers', () => {
   it('emits global n-gpu-layers when fit is off', async () => {
     setupModel('llama', {})
-    await generatePreset('/p', '/jan', { fit: false, n_gpu_layers: 20 } as any, {
+    await generatePreset('/p', '/jan', { n_gpu_layers: 20 } as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
     expect(ini).toContain('n-gpu-layers = 20')
   })
 
-  it('omits global n-gpu-layers when auto-fit is enabled so fit owns offload', async () => {
-    setupModel('llama', {})
-    await generatePreset('/p', '/jan', { fit: true, n_gpu_layers: 20 } as any, {
-      supportsMtp: false,
-    })
-    const ini = writtenFiles['/p/router.preset.ini']
-    expect(ini).not.toContain('n-gpu-layers')
-  })
-
   it('emits per-model n-gpu-layers when fit is off', async () => {
     setupModel('llama', { n_gpu_layers: 33 })
-    await generatePreset('/p', '/jan', { fit: false } as any, {
+    await generatePreset('/p', '/jan', {} as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
     expect(ini).toContain('n-gpu-layers = 33')
-  })
-
-  it('omits per-model n-gpu-layers when auto-fit is enabled', async () => {
-    setupModel('llama', { n_gpu_layers: 33 })
-    await generatePreset('/p', '/jan', { fit: true } as any, {
-      supportsMtp: false,
-    })
-    const ini = writtenFiles['/p/router.preset.ini']
-    expect(ini).not.toContain('n-gpu-layers')
   })
 })
 
@@ -366,7 +376,7 @@ describe('generatePreset context-shift', () => {
 describe('generatePreset embedding ctx-size', () => {
   it('pins embedders to native ctx-size = 0 so they do not inherit the global 8192', async () => {
     setupModel('minilm', { embedding: true })
-    await generatePreset('/p', '/jan', { fit: false } as any, {
+    await generatePreset('/p', '/jan', {} as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
@@ -378,7 +388,7 @@ describe('generatePreset embedding ctx-size', () => {
 
   it('keeps a positive per-model embedder ctx-size instead of forcing native', async () => {
     setupModel('minilm', { embedding: true, ctx_size: 2048 })
-    await generatePreset('/p', '/jan', { fit: false } as any, {
+    await generatePreset('/p', '/jan', {} as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
@@ -387,5 +397,20 @@ describe('generatePreset embedding ctx-size', () => {
     // the embedder section must not additionally emit native 0.
     const embedderSection = ini.slice(ini.indexOf('[minilm]'))
     expect(embedderSection).not.toContain('ctx-size = 0')
+  })
+})
+
+describe('generatePreset device pinning', () => {
+  it('writes the device list and tensor split the planner chose', () => {
+    // Without a device line llama.cpp uses every card it can see, which spends
+    // VRAM the context plan never budgeted.
+    setupModel('llama', { device: 'CUDA0,CUDA1', tensor_split: '0.7,0.3' })
+    return generatePreset('/p', '/jan', {} as any, { supportsMtp: false }).then(
+      () => {
+        const ini = writtenFiles['/p/router.preset.ini']
+        expect(ini).toContain('device = CUDA0,CUDA1')
+        expect(ini).toContain('tensor-split = 0.7,0.3')
+      }
+    )
   })
 })

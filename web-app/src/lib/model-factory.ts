@@ -38,7 +38,8 @@ export interface ModelParameters {
   auto_compact?: boolean
   presence_penalty?: number
   frequency_penalty?: number
-  stop_sequences?: string[]
+  /** Newline-separated in the UI; sent as the wire `stop` array. */
+  stop?: string
 }
 
 import {
@@ -79,6 +80,19 @@ import { i18n } from '@/i18n/react-i18next-compat'
 import { useAppState } from '@/hooks/useAppState'
 import { useGeneralSetting } from '@/hooks/useGeneralSetting'
 import { ensureAnthropicHeaders } from '@/lib/remoteModelCatalog'
+import {
+  autofitPlacement,
+  effectiveBackend,
+  effectiveCacheType,
+  effectiveFlashAttn,
+  effectiveParallel,
+  effectiveRopeFactor,
+  effectiveUbatch,
+  machineMemoryFrom,
+} from './contextPlanner'
+import { readModelShape, draftKvElementsPerToken, type ModelShape } from './gguf'
+import type { GgufMetadata } from '@janhq/tauri-plugin-llamacpp-api'
+import type { DeviceList, SystemUsage } from '@/services/hardware/types'
 
 /**
  * Llama.cpp timings structure from the response
@@ -389,6 +403,18 @@ export function createCustomFetch(
 
   // Server expects an array of sampler names; the UI stores a comma/
   // semicolon-separated string for easy editing.
+  // Stop strings are newline-separated in the UI because a stop string may
+  // itself contain a comma. Empty yields undefined, so an untouched field
+  // sends nothing rather than an empty array some servers reject.
+  const coerceStop = (value: unknown): unknown => {
+    if (typeof value !== 'string') return value
+    const stops = value
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return stops.length > 0 ? stops : undefined
+  }
+
   const coerceSamplers = (value: unknown): unknown => {
     if (typeof value !== 'string') return value
     const names = value
@@ -415,7 +441,9 @@ export function createCustomFetch(
       const coerced =
         key === 'samplers'
           ? coerceSamplers(value)
-          : coerceNumericParam(key, value)
+          : key === 'stop'
+            ? coerceStop(value)
+            : coerceNumericParam(key, value)
       if (coerced === undefined) continue
       normalised[targetKey] = coerced
     }
@@ -560,6 +588,344 @@ export function createCustomFetch(
       statusText: res.statusText,
       headers: res.headers,
     })
+  }
+}
+
+/**
+ * Narrow view of the service hub the send-time fit needs. The real hub is
+ * wider; structural typing keeps this usable wherever a hub is at hand.
+ */
+interface AutofitServiceHub {
+  models(): {
+    getActiveModels(): Promise<string[]>
+    evictForLoad?(id: string): Promise<boolean>
+    readModelGguf(id: string): Promise<GgufMetadata | undefined>
+    getModelExtraSizes?(id: string): Promise<
+      | {
+          mmprojBytes: number
+          mtp: boolean
+          mtpModelPath?: string
+          mtpDraftBytes: number
+          mtpDraftHeader?: GgufMetadata
+        }
+      | undefined
+    >
+    updateModelSettings(
+      id: string,
+      patch: Record<string, string | number | boolean | null | undefined>
+    ): Promise<void>
+  }
+  hardware(): {
+    getLlamacppDevices(): Promise<DeviceList[]>
+    getSystemUsage(): Promise<SystemUsage | null>
+  }
+}
+
+type SettingsBag =
+  | Record<string, { controller_props?: { value?: unknown } }>
+  | undefined
+
+function autofitSetting(settings: SettingsBag, key: string): unknown {
+  return settings?.[key]?.controller_props?.value
+}
+
+/** GGUF shapes for fitting, kept for the life of the session like the plan hook's. */
+const autofitShapeCache = new Map<string, Promise<ModelShape | undefined>>()
+
+/** Longest wait for freed VRAM to show up in the reading. */
+const VRAM_SETTLE_TIMEOUT_MS = 4000
+const VRAM_SETTLE_INTERVAL_MS = 150
+
+const totalGpuUsedMiB = (usage: SystemUsage | null): number =>
+  usage ? usage.gpus.reduce((sum, gpu) => sum + (gpu.used_memory || 0), 0) : 0
+
+/**
+ * Waits for the VRAM a just-unloaded model held to leave the reading.
+ *
+ * The unload returns when the router has been told, not when the driver has
+ * reclaimed the memory: the model's child process still has to exit. Planning
+ * against the reading taken in that window budgets gigabytes that are already
+ * gone, and the model loads with layers on the CPU that had a card waiting
+ * for them. So the reading is polled until it stops falling.
+ *
+ * Two consecutive equal readings, because the figure can plateau briefly
+ * while a large allocation is released in pieces. Returns the last reading,
+ * or null when the poll never produced one.
+ */
+async function settleGpuUsage(
+  getSystemUsage: () => Promise<SystemUsage | null>
+): Promise<SystemUsage | null> {
+  const deadline = Date.now() + VRAM_SETTLE_TIMEOUT_MS
+  let last: SystemUsage | null = null
+  let steady = 0
+  while (Date.now() < deadline) {
+    const usage = await getSystemUsage().catch(() => null)
+    if (usage) {
+      if (last && totalGpuUsedMiB(usage) >= totalGpuUsedMiB(last)) {
+        if (++steady >= 2) return usage
+      } else {
+        steady = 0
+      }
+      last = usage
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, VRAM_SETTLE_INTERVAL_MS)
+    )
+  }
+  return last
+}
+
+const lastFitNoticeAt = new Map<string, number>()
+function notifyAutofitShortfall(
+  modelId: string,
+  shortfall: { requested: number; fits: number }
+): void {
+  const now = Date.now()
+  if (now - (lastFitNoticeAt.get(modelId) ?? 0) < 5 * 60 * 1000) return
+  lastFitNoticeAt.set(modelId, now)
+  void import('sonner')
+    .then(({ toast }) => {
+      toast.warning('Context fitted to available memory', {
+        description: `Fits ${shortfall.fits.toLocaleString()} of the requested ${shortfall.requested.toLocaleString()} tokens right now. Free memory or lower context for the full window.`,
+      })
+    })
+    .catch(() => {
+      console.warn('[autofit]', modelId, shortfall)
+    })
+}
+
+/**
+ * Send-time autofit: refits the stored context request against a fresh
+ * machine snapshot before the router preset is built, so a load never runs
+ * on a stale sheet-time placement.
+ *
+ * Only when the model is not already loaded — a sticky session is never
+ * refit under itself — and never for hand-tuned (`plan_manual`) models.
+ * Best effort throughout: anything missing or failing leaves the stored
+ * settings untouched and the normal load proceeds. In particular the request
+ * itself (`ctx_len`) is never rewritten, except to record a default when
+ * none usable was stored; a request that exceeds every band loads with the
+ * closest placement and a notice instead of being clamped.
+ */
+async function autofitPlacementForLoad(
+  modelId: string,
+  serviceHub: AutofitServiceHub
+): Promise<void> {
+  try {
+    const models = serviceHub.models()
+    if (!models || typeof models.getActiveModels !== 'function') return
+    const activeModels = await models
+      .getActiveModels()
+      .catch(() => [] as string[])
+    if (activeModels.includes(modelId)) return
+
+    const { useModelProvider } = await import('@/hooks/useModelProvider')
+    const provider = useModelProvider.getState().getProviderByName('llamacpp')
+    const model = provider?.models?.find((m) => m.id === modelId) as
+      | { embedding?: boolean; settings?: SettingsBag }
+      | undefined
+    if (!model || model.embedding === true) return
+    if (autofitSetting(model.settings, 'plan_manual') === true) return
+
+    const devices = (autofitSetting(model.settings, 'device') as string) || ''
+    const storedCtxLen = Number(autofitSetting(model.settings, 'ctx_len')) || 0
+    // Absent means nobody has pinned a context: `ctx_len` is seeded at 8192
+    // on import, so the stored number alone never said whether it was chosen.
+    const ctxAuto = autofitSetting(model.settings, 'ctx_auto') !== false
+    // Recurrent state and the probe floor both scale with the effective
+    // parallel slots, flash-attn, backend-build and MTP state (per-model
+    // override, else global, else auto) — the same axes the calibration key
+    // is built on.
+    const globalSettings = (
+      provider as {
+        settings?: Array<{
+          key?: string
+          controller_props?: { value?: unknown }
+        }>
+      }
+    )?.settings
+    const globalValue = (key: string) =>
+      globalSettings?.find((s) => s?.key === key)?.controller_props?.value
+    // Legacy Jan fitting owns placement; Kuru Fit is opt-out, so installs
+    // predating the key behave as fitted.
+    if (globalValue('kuru_fit') === false) return
+    const kvCacheType = effectiveCacheType(
+      autofitSetting(model.settings, 'cache_type_k'),
+      globalValue('cache_type_k')
+    )
+    const ubatch = effectiveUbatch(
+      autofitSetting(model.settings, 'ubatch_size'),
+      globalValue('ubatch_size')
+    )
+    const sequences = effectiveParallel(
+      autofitSetting(model.settings, 'parallel'),
+      globalValue('parallel')
+    )
+    const flashAttn = effectiveFlashAttn(
+      autofitSetting(model.settings, 'flash_attn'),
+      globalValue('flash_attn')
+    )
+    const backend = effectiveBackend(
+      globalValue('version_backend'),
+      globalValue('llamacpp_version'),
+      globalValue('llamacpp_backend')
+    )
+    const ropeFactor = effectiveRopeFactor(
+      globalValue('rope_scaling'),
+      globalValue('rope_scale'),
+      globalValue('rope_freq_scale')
+    )
+    const swaFull = globalValue('swa_full') === true
+    // Per-model only, and it moves the whole cache off the cards.
+    const noKvOffload =
+      autofitSetting(model.settings, 'no_kv_offload') === true
+    const mmprojOffload =
+      autofitSetting(model.settings, 'offload_mmproj') !== false
+
+    if (typeof models.readModelGguf !== 'function') return
+    let pending = autofitShapeCache.get(modelId)
+    if (!pending) {
+      pending = models
+        .readModelGguf(modelId)
+        .then((header) => (header ? readModelShape(header) : undefined))
+        .catch(() => undefined)
+      autofitShapeCache.set(modelId, pending)
+    }
+    const cached = await pending
+    if (!cached) return
+    // Sizes model.yml folds into `size_bytes` that the header does not
+    // cover. Missing on older engines; then the model plans as text-only
+    // without MTP. Copied, not mutated: the cache above is shared.
+    const extra = await models
+      .getModelExtraSizes?.(modelId)
+      .catch(() => undefined)
+    const shape =
+      extra && (extra.mmprojBytes || extra.mtpDraftBytes)
+        ? { ...cached, mmprojBytes: extra.mmprojBytes ?? 0 }
+        : cached
+    const mtp = extra?.mtp === true
+    const mtpDraftBytes = extra?.mtpDraftBytes ?? 0
+    const mtpDraftKvPerToken = draftKvElementsPerToken(extra?.mtpDraftHeader)
+
+    const hardware = serviceHub.hardware?.()
+    if (!hardware || typeof hardware.getLlamacppDevices !== 'function') return
+
+    // Run the eviction the load is about to run anyway, then wait for the
+    // freed VRAM to leave the reading. Without this the incoming model is
+    // planned against a card still holding the model it replaces, which on a
+    // single-card machine at the default `models_max = 1` is the whole card:
+    // the plan pushes layers onto the CPU and the load then finds the card
+    // empty. This is a reorder, not extra work -- the unload happened either
+    // way -- so it costs only the settle poll.
+    const readUsage = () =>
+      typeof hardware.getSystemUsage === 'function'
+        ? hardware.getSystemUsage().catch(() => null)
+        : Promise.resolve(null)
+    const evicted =
+      typeof models.evictForLoad === 'function'
+        ? await models.evictForLoad(modelId).catch(() => false)
+        : false
+
+    // Sequential, not parallel: the device list carries its own free-VRAM
+    // figure, which `machineMemoryFrom` falls back to, so it has to be read
+    // after the eviction has settled too.
+    const usage = evicted ? await settleGpuUsage(readUsage) : await readUsage()
+    const devicesList = await hardware
+      .getLlamacppDevices()
+      .catch(() => undefined)
+    if (!devicesList) return
+
+    const { useHardware, gpuMemoryUsage, resolveGpuReserveMiB } = await import(
+      '@/hooks/useHardware'
+    )
+    const { hardwareData, systemUsage: storedUsage, gpuReserveMiB } =
+      useHardware.getState()
+    if (!hardwareData || !hardwareData.total_memory) return
+    const systemUsage = usage ?? storedUsage
+    if (usage) useHardware.getState().updateSystemUsage(usage)
+
+    const active = devicesList.filter((d) => d.activated !== false)
+    // The model is not resident (checked above), so measured use is safe to
+    // count — there is no own footprint inside the reading.
+    const usedMiB = systemUsage?.used_memory
+    const perDevice = Object.fromEntries(
+      active.map((device) => [
+        device.id,
+        {
+          usedMiB: gpuMemoryUsage(systemUsage, hardwareData, device.name)
+            ?.used,
+          reserveMiB: resolveGpuReserveMiB(
+            systemUsage,
+            hardwareData,
+            device,
+            gpuReserveMiB
+          ),
+        },
+      ])
+    )
+    const ramUsedMiB =
+      typeof usedMiB === 'number' && usedMiB > 0 ? usedMiB : undefined
+    const machine = machineMemoryFrom(
+      active,
+      hardwareData,
+      perDevice,
+      ramUsedMiB
+    )
+
+    // This reading was taken with the model unloaded, which is the one thing
+    // the context sheet cannot measure for itself once the model is resident.
+    const { useLoadBaseline } = await import('@/hooks/useLoadBaseline')
+    useLoadBaseline.getState().record(modelId, {
+      perDeviceUsedMiB: Object.fromEntries(
+        Object.entries(perDevice).flatMap(([id, entry]) =>
+          typeof entry.usedMiB === 'number' ? [[id, entry.usedMiB]] : []
+        )
+      ),
+      ramUsedMiB,
+    })
+
+    const { useModelCalibration } = await import('@/hooks/useModelCalibration')
+    const calibrations =
+      useModelCalibration.getState().byModel[modelId]
+    const result = autofitPlacement({
+      shape,
+      machine,
+      kvCacheType,
+      ubatch,
+      sequences,
+      flashAttn,
+      backend,
+      mtp,
+      mtpDraftBytes,
+      mtpDraftKvPerToken,
+      mmprojOffload,
+      swaFull,
+      ropeFactor,
+      noKvOffload,
+      devices,
+      storedCtxLen,
+      ctxAuto,
+      calibrations,
+      currentValue: (key) => autofitSetting(model.settings, key),
+    })
+    if (!result || Object.keys(result.patch).length === 0) {
+      if (result?.shortfall) notifyAutofitShortfall(modelId, result.shortfall)
+      return
+    }
+
+    // Both writes are awaited before startModel builds the router preset from
+    // model.yml.
+    const { applyPlannerPatch } = await import('./plannerPatch')
+    await applyPlannerPatch(
+      modelId,
+      result.patch,
+      typeof models.updateModelSettings === 'function'
+        ? (id, patch) => models.updateModelSettings(id, patch)
+        : undefined
+    )
+    if (result.shortfall) notifyAutofitShortfall(modelId, result.shortfall)
+  } catch {
+    // Fail open: the normal load proceeds on stored settings.
   }
 }
 
@@ -911,6 +1277,12 @@ export class ModelFactory {
         const serviceHub = useServiceStore.getState().serviceHub
 
         if (serviceHub) {
+          // Refit the stored request against a fresh snapshot before the
+          // router preset is built. Never throws: failures keep stored
+          // settings and the normal load proceeds.
+          await autofitPlacementForLoad(modelId, serviceHub).catch(
+            () => undefined
+          )
           await serviceHub.models().startModel(provider, modelId)
         }
       } catch (error) {

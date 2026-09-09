@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import {
   IconAdjustmentsHorizontal,
-  IconChevronDown,
   IconSettings,
   IconUser,
 } from '@tabler/icons-react'
@@ -14,11 +13,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -26,11 +20,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-import { AssistantsMenu } from '@/components/AssistantsMenu'
 import { AvatarEmoji } from '@/containers/AvatarEmoji'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { ParametersSection } from '@/containers/ParametersSection'
-import { useAssistant } from '@/hooks/useAssistant'
+import { useCharacters } from '@/hooks/useCharacters'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { paramsSettings, type ParamDef } from '@/lib/predefinedParams'
 import { isPredefinedRemoteProvider } from '@/lib/providerCaps'
@@ -43,25 +36,25 @@ interface SamplerPopoverProps {
   /** Currently-selected model ID. Drives model-family rejection (e.g. o1/gpt-5
    *  reasoning models reject temperature/top_p). */
   modelId?: string
-  /** Optional assistant switcher. When omitted, the header shows the active
-   *  assistant name as static text. */
-  assistantSwitcher?: {
-    assistants: Assistant[]
+  /** Optional character switcher. When omitted, the header shows the active
+   *  character name as static text. */
+  characterSwitcher?: {
+    characters: Character[]
     currentThread: Thread | undefined
-    selectedAssistantId: string | undefined
-    setSelectedAssistantId: (id: string) => void
-    updateCurrentThreadAssistant: (assistant: Assistant) => void
+    selectedCharacterId: string | undefined
+    setSelectedCharacterId: (id: string) => void
+    updateCurrentThreadCharacter: (character?: Character | Assistant) => void
   }
 }
 
 export function SamplerPopover({
   providerId,
   modelId,
-  assistantSwitcher,
+  characterSwitcher,
 }: SamplerPopoverProps) {
-  const currentAssistant = useAssistant((s) => s.currentAssistant)
-  const updateAssistant = useAssistant((s) => s.updateAssistant)
-  const assistantsLoading = useAssistant((s) => s.loading)
+  const currentCharacter = useCharacters((s) => s.currentCharacter)
+  const updateCharacter = useCharacters((s) => s.updateCharacter)
+  const charactersLoading = useCharacters((s) => s.loading)
   const providers = useModelProvider((s) => s.providers)
 
   const scopedProviders = useMemo(() => {
@@ -73,42 +66,42 @@ export function SamplerPopover({
   }, [providers, providerId])
 
   // The header must match the switcher's checkmark in every context:
-  //  - inside a thread: the thread's assigned assistant, including "None"
+  //  - inside a thread: the thread's assigned character, including "None"
   //    (model-only) which must NOT fall back to the global default;
   //  - off-thread with a switcher (home screen): the dropdown selection
-  //    (selectedAssistantId), since that's what a new chat will use;
-  //  - no switcher at all: the global current assistant.
-  const inThread = !!assistantSwitcher?.currentThread
-  const threadAssistant = assistantSwitcher?.currentThread?.assistants?.[0]
-  const isThreadAssistant =
-    !!threadAssistant && threadAssistant.id !== 'model-only'
-  const selectedAssistant = assistantSwitcher
-    ? assistantSwitcher.assistants.find(
-        (a) => a.id === assistantSwitcher.selectedAssistantId
+  //    (selectedCharacterId), since that's what a new chat will use;
+  //  - no switcher at all: the global current character.
+  const inThread = !!characterSwitcher?.currentThread
+  const threadCharacter = characterSwitcher?.currentThread?.assistants?.[0]
+  const isThreadCharacter =
+    !!threadCharacter && threadCharacter.id !== 'model-only'
+  const selectedCharacter = characterSwitcher
+    ? characterSwitcher.characters.find(
+        (c) => c.id === characterSwitcher.selectedCharacterId
       )
-    : currentAssistant
-  const activeAssistant: Assistant | undefined = inThread
-    ? isThreadAssistant
-      ? threadAssistant
+    : currentCharacter
+  const activeCharacter: Character | undefined = inThread
+    ? isThreadCharacter
+      ? threadCharacter
       : undefined
-    : selectedAssistant
+    : selectedCharacter
 
-  const params = activeAssistant?.parameters ?? {}
+  const params = activeCharacter?.parameters ?? {}
   const samplerKeys = Object.keys(params).filter((k) => k in paramsSettings)
   const hasOverrides = samplerKeys.length > 0
 
   const writeParams = (next: Record<string, unknown>) => {
-    if (!activeAssistant) return
-    const updated = { ...activeAssistant, parameters: next }
-    if (isThreadAssistant && assistantSwitcher) {
+    if (!activeCharacter) return
+    const updated = { ...activeCharacter, parameters: next }
+    if (isThreadCharacter && characterSwitcher) {
       // Sync the thread's copy so inference picks it up immediately; mirror
-      // into the canonical assistant only when it still exists.
-      assistantSwitcher.updateCurrentThreadAssistant(updated)
-      if (assistantSwitcher.assistants.some((a) => a.id === updated.id)) {
-        updateAssistant(updated)
+      // into the canonical character only when it still exists.
+      characterSwitcher.updateCurrentThreadCharacter(updated)
+      if (characterSwitcher.characters.some((c) => c.id === updated.id)) {
+        updateCharacter(updated)
       }
     } else {
-      updateAssistant(updated)
+      updateCharacter(updated)
     }
   }
 
@@ -152,10 +145,10 @@ export function SamplerPopover({
 
   if (isPredefinedRemoteProvider(providerId)) return null
 
-  const triggerLabel = assistantsLoading
-    ? 'Loading assistant…'
-    : activeAssistant
-      ? `Sampling — ${activeAssistant.name}`
+  const triggerLabel = charactersLoading
+    ? 'Loading character…'
+    : activeCharacter
+      ? `Sampling — ${activeCharacter.name}`
       : 'Sampling'
 
   return (
@@ -168,7 +161,7 @@ export function SamplerPopover({
               size="icon-xs"
               aria-label="Sampling parameters"
               className="relative"
-              disabled={assistantsLoading}
+              disabled={charactersLoading}
             >
               <IconAdjustmentsHorizontal
                 size={18}
@@ -200,10 +193,7 @@ export function SamplerPopover({
         className="w-[380px] p-0 flex flex-col max-h-[var(--radix-popover-content-available-height)]"
       >
         <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2 border-b">
-          <AssistantHeader
-            currentAssistant={activeAssistant}
-            assistantSwitcher={assistantSwitcher}
-          />
+          <CharacterHeader currentCharacter={activeCharacter} />
           <div className="flex items-center gap-1 shrink-0">
             {hasOverrides && (
               <Button variant="ghost" size="sm" onClick={handleResetAll}>
@@ -213,18 +203,18 @@ export function SamplerPopover({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="ghost" size="icon-sm" asChild>
-                  <Link to={route.settings.assistant}>
+                  <Link to={route.settings.characters}>
                     <IconSettings size={16} className="text-muted-foreground" />
                   </Link>
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Open assistant settings</p>
+                <p>Open character settings</p>
               </TooltipContent>
             </Tooltip>
           </div>
         </div>
-        {activeAssistant ? (
+        {activeCharacter ? (
           <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
             <ParametersSection
               params={params}
@@ -240,7 +230,7 @@ export function SamplerPopover({
           </div>
         ) : (
           <div className="text-xs text-muted-foreground px-4 py-3">
-            Pick an assistant above to configure sampling.
+            Pick a character above to configure sampling.
           </div>
         )}
       </PopoverContent>
@@ -248,21 +238,22 @@ export function SamplerPopover({
   )
 }
 
-interface AssistantHeaderProps {
-  currentAssistant: Assistant | undefined
-  assistantSwitcher: SamplerPopoverProps['assistantSwitcher']
+interface CharacterHeaderProps {
+  currentCharacter: Character | undefined
 }
 
-function AssistantHeader({
-  currentAssistant,
-  assistantSwitcher,
-}: AssistantHeaderProps) {
+/**
+ * Whose sampling settings these are. A label, not a switcher: the character
+ * pill in the chatbox toolbar is the one place characters get swapped, so a
+ * second dropdown here would just be a second door to the same room.
+ */
+function CharacterHeader({ currentCharacter }: CharacterHeaderProps) {
   const { t } = useTranslation()
-  const label = (
-    <span className="flex items-center gap-1.5 min-w-0">
-      {currentAssistant?.avatar ? (
+  return (
+    <div className="flex items-center gap-1.5 min-w-0">
+      {currentCharacter?.avatar ? (
         <AvatarEmoji
-          avatar={currentAssistant.avatar}
+          avatar={currentCharacter.avatar}
           imageClassName="size-4 object-contain"
           textClassName="text-sm"
         />
@@ -270,41 +261,10 @@ function AssistantHeader({
         <IconUser size={14} className="text-muted-foreground" />
       )}
       <span className="text-sm font-medium truncate">
-        {currentAssistant?.name ?? t('common:noAssistant')}
+        {currentCharacter?.name ?? t('common:noCharacter')}
       </span>
-    </span>
-  )
-
-  if (!assistantSwitcher) {
-    return <div className="flex items-center gap-1 min-w-0">{label}</div>
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="-ml-2 h-7 px-2 gap-1 min-w-0"
-        >
-          {label}
-          <IconChevronDown size={14} className="text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        className="max-h-64 overflow-y-auto"
-      >
-        <AssistantsMenu
-          selectedAssistant={assistantSwitcher.selectedAssistantId}
-          setSelectedAssistant={assistantSwitcher.setSelectedAssistantId}
-          currentThread={assistantSwitcher.currentThread}
-          updateCurrentThreadAssistant={
-            assistantSwitcher.updateCurrentThreadAssistant
-          }
-          assistants={assistantSwitcher.assistants}
-        />
-      </DropdownMenuContent>
-    </DropdownMenu>
+    </div>
   )
 }
+
+

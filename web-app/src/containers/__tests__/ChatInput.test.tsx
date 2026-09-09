@@ -22,7 +22,7 @@ vi.mock('@/hooks/usePrompt', () => ({
     }),
 }))
 
-const updateCurrentThreadAssistantMock = vi.fn()
+const updateCurrentThreadCharacterMock = vi.fn()
 const updateCurrentThreadModelMock = vi.fn()
 const createThreadMock = vi.fn()
 const getCurrentThreadMock = vi.fn(() => undefined)
@@ -32,7 +32,7 @@ vi.mock('@/hooks/useThreads', () => ({
     selector({
       currentThreadId: 'thread-1',
       getCurrentThread: getCurrentThreadMock,
-      updateCurrentThreadAssistant: updateCurrentThreadAssistantMock,
+      updateCurrentThreadCharacter: updateCurrentThreadCharacterMock,
       updateCurrentThreadModel: updateCurrentThreadModelMock,
       createThread: createThreadMock,
     }),
@@ -93,12 +93,12 @@ vi.mock('@/hooks/useTokensCount', () => ({
   }),
 }))
 
-vi.mock('@/hooks/useAssistant', () => ({
-  useAssistant: () => ({
+vi.mock('@/hooks/useCharacters', () => ({
+  useCharacters: () => ({
     loading: false,
-    currentAssistant: { id: 'a1', name: 'Global assistant', avatar: '' },
-    setCurrentAssistant: vi.fn(),
-    assistants: [
+    currentCharacter: { id: 'a1', name: 'Global assistant', avatar: '' },
+    setCurrentCharacter: vi.fn(),
+    characters: [
       { id: 'a1', name: 'Global assistant', avatar: '' },
       { id: 'a2', name: 'Project assistant', avatar: '' },
     ],
@@ -253,16 +253,26 @@ vi.mock('@/containers/dialogs/JanBrowserExtensionDialog', () => ({
   __esModule: true,
   default: () => null,
 }))
+// The three toolbar pills each drive their own stores (and are covered by
+// their own tests); this suite is about the input itself.
+vi.mock('@/containers/DropdownModelProvider', () => ({
+  default: () => <div data-testid="model-pill" />,
+}))
+vi.mock('@/containers/CharacterPill', () => ({
+  CharacterPill: () => <div data-testid="character-pill" />,
+}))
+vi.mock('@/containers/LorebookPill', () => ({
+  LorebookPill: () => <div data-testid="lorebook-pill" />,
+}))
+vi.mock('@/containers/PersonaPill', () => ({
+  PersonaPill: () => <div data-testid="persona-pill" />,
+}))
 vi.mock('@/containers/MovingBorder', () => ({
   MovingBorder: ({ children }: any) => <div>{children}</div>,
 }))
 vi.mock('@/components/TokenCounter', () => ({
   TokenCounter: () => <div data-testid="stub-token-counter" />,
 }))
-vi.mock('@/components/AssistantsMenu', () => ({
-  AssistantsMenu: () => <div data-testid="stub-assistants-menu" />,
-}))
-
 // Minimal dropdown/tooltip stubs (pass-throughs to keep DOM shallow)
 vi.mock('@/components/ui/dropdown-menu', () => {
   const Pass = ({ children }: any) => <>{children}</>
@@ -341,12 +351,14 @@ describe('ChatInput', () => {
     expect(document.querySelector('[data-test-id="send-message-button"]')).toBeTruthy()
   })
 
-  it('shows the project assistant for a new conversation', () => {
+  it('resolves the project character for a new conversation', () => {
+    // Character display/switching moved to the header pill; ChatInput's job
+    // is resolving which character a new chat will use.
     renderInput({ projectId: 'project-1', projectAssistantId: 'a2' })
 
-    expect(
-      screen.getByRole('button', { name: 'Switch assistant' })
-    ).toHaveTextContent('Project assistant')
+    const ta = getTextarea()
+    expect(ta).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Switch assistant' })).toBeNull()
   })
 
   it('disables the send button when prompt is empty', () => {
@@ -573,10 +585,13 @@ describe('ChatInput', () => {
       expect(screen.queryByTestId('stub-token-counter')).not.toBeInTheDocument()
     })
 
-    it('does not render with no messages and an empty prompt', () => {
+    // The counter is the context-visualizer trigger, so it is permanent in a
+    // thread chatbox instead of appearing only once a turn is in flight.
+    it('renders with no messages and an empty prompt', () => {
       promptState = ''
       renderInput()
-      expect(screen.queryByTestId('stub-token-counter')).not.toBeInTheDocument()
+      expect(screen.getByTestId('stub-token-counter')).toBeInTheDocument()
     })
   })
 })
+

@@ -29,6 +29,15 @@ export function PromptProgress({ hideIdle = false }: { hideIdle?: boolean }) {
     promptProgress.total > 0 &&
     percentage < 100
 
+  // First-time memory warm-up (page faults / mmap) is slow: VRAM shows
+  // allocated in the task manager while RAM is still climbing, and the only
+  // prompt event so far is total>0 with nothing processed. Calling that
+  // "Reading: 0%" implies the prompt is being read when it is really still
+  // loading into memory. The loading flag is already cleared on the first
+  // chunk (see model-factory), so processed==0 has to stand in for it.
+  const isWarmingMemory =
+    !!showReading && (promptProgress?.processed ?? 0) === 0
+
   // Nothing concrete to report (no model load, no prompt-reading progress).
   // Callers driving their own activity label (e.g. tool-call traces) pass
   // hideIdle to suppress the redundant generic "Working…" fallback.
@@ -49,15 +58,21 @@ export function PromptProgress({ hideIdle = false }: { hideIdle?: boolean }) {
       : undefined
 
   const label = loadingModel
-    ? loadPercentage !== undefined
-      ? `Loading ${stageLabel ?? 'model'}: ${loadPercentage}%`
-      : 'Loading model…'
-    : showReading
-      ? `Reading: ${percentage}%`
-      : 'Working…'
+    ? showReading
+      ? 'Loading memory…'
+      : loadPercentage !== undefined
+        ? `Loading ${stageLabel ?? 'model'}: ${loadPercentage}%`
+        : 'Loading model…'
+    : isWarmingMemory
+      ? 'Loading memory…'
+      : showReading
+        ? `Reading: ${percentage}%`
+        : 'Working…'
 
   const detail =
-    showReading && !loadingModel ? buildDetail(promptProgress) : undefined
+    showReading && !loadingModel && !isWarmingMemory
+      ? buildDetail(promptProgress)
+      : undefined
 
   return (
     <div className="inline-flex flex-col gap-2 rounded-lg border border-border/40 bg-muted/30 px-3 py-2 min-w-56">
@@ -65,7 +80,7 @@ export function PromptProgress({ hideIdle = false }: { hideIdle?: boolean }) {
         <Loader className="animate-spin w-3.5 h-3.5 text-primary shrink-0" />
         <span className="font-medium text-foreground">{label}</span>
       </div>
-      {showReading && !loadingModel && (
+      {showReading && !loadingModel && !isWarmingMemory && (
         <Progress value={percentage} className="h-1 bg-secondary/60" />
       )}
       {detail && (

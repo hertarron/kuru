@@ -179,22 +179,18 @@ vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (config: any) => ({ ...config, id: '/threads/$threadId' }),
   useParams: () => ({ threadId: 'thread-1' }),
   useSearch: () => ({ threadModel: undefined }),
+  useNavigate: () => vi.fn(),
 }))
 
 vi.mock('@/containers/HeaderPage', () => ({
   default: ({ children }: any) => <div data-testid="header-page">{children}</div>,
 }))
 
-vi.mock('@/containers/DropdownModelProvider', () => ({
-  default: ({ model }: any) => (
-    <div data-testid="model-dropdown">{model ? model.id : 'no-model'}</div>
-  ),
-}))
-
 vi.mock('@/containers/ChatInput', () => ({
-  default: ({ onSubmit, onStop, chatStatus }: any) => (
+  default: ({ onSubmit, onStop, chatStatus, model }: any) => (
     <div data-testid="chat-input">
       <span data-testid="chat-status">{chatStatus}</span>
+      <span data-testid="chat-model">{model ? model.id : 'no-model'}</span>
       <button
         data-testid="chat-send"
         onClick={() => onSubmit('hello world', undefined)}
@@ -213,11 +209,19 @@ vi.mock('@/containers/MessageItem', () => ({
     message,
     onRegenerate,
     onEdit,
+    onFork,
     onDelete,
     versionInfo,
     onSwitchVersion,
+    charAvatarUrl,
+    userAvatarUrl,
   }: any) => (
-    <div data-testid={`message-${message.id}`} data-role={message.role}>
+    <div
+      data-testid={`message-${message.id}`}
+      data-role={message.role}
+      data-char-avatar={charAvatarUrl ?? ''}
+      data-user-avatar={userAvatarUrl ?? ''}
+    >
       <span>{message.id}</span>
       {versionInfo && (
         <span data-testid={`version-${message.id}`}>
@@ -231,6 +235,12 @@ vi.mock('@/containers/MessageItem', () => ({
         prev
       </button>
       <button
+        data-testid={`next-${message.id}`}
+        onClick={() => onSwitchVersion?.(message.id, 1)}
+      >
+        next
+      </button>
+      <button
         data-testid={`regen-${message.id}`}
         onClick={() => onRegenerate(message.id)}
       >
@@ -241,6 +251,12 @@ vi.mock('@/containers/MessageItem', () => ({
         onClick={() => onEdit(message.id, 'edited text')}
       >
         edit
+      </button>
+      <button
+        data-testid={`fork-${message.id}`}
+        onClick={() => onFork?.(message.id)}
+      >
+        fork
       </button>
       <button
         data-testid={`del-${message.id}`}
@@ -275,6 +291,12 @@ vi.mock('@/components/ui/button', () => ({
 vi.mock('@tabler/icons-react', () => ({
   IconAlertCircle: () => <span />,
   IconRefresh: () => <span />,
+  IconSettings: () => <span />,
+  IconCopy: () => <span />,
+  IconEye: () => <span />,
+  IconChevronRight: () => <span />,
+  IconBook: () => <span />,
+  IconWorld: () => <span />,
 }))
 
 vi.mock('@/lib/utils', () => ({
@@ -283,6 +305,11 @@ vi.mock('@/lib/utils', () => ({
 
 vi.mock('@/lib/instructionTemplate', () => ({
   renderInstructions: (i: string) => `rendered:${i}`,
+}))
+
+vi.mock('@/hooks/useGeneralSetting', () => ({
+  useGeneralSetting: (selector: any) =>
+    selector({ userName: 'Tester' }),
 }))
 
 vi.mock('@/lib/extension', () => ({
@@ -308,6 +335,25 @@ vi.mock('@/lib/messages', () => ({
       .map((p: any) => ({ type: 'text', text: { value: p.text, annotations: [] } })),
   uiMessageHasMeaningfulContent: (msg: any) =>
     !!msg?.parts?.some((p: any) => p.type === 'text' && p.text?.trim()),
+  threadMessageIsEmpty: (msg: any) => {
+    // Mirrors lib/messages.threadMessageIsEmpty: only assistant rows with
+    // no meaningful content count as empty.
+    if (!msg || msg.role !== 'assistant') return false
+    const content = msg.content || []
+    if (content.length === 0) return true
+    for (const c of content) {
+      if (
+        (c.type === 'text' || c.type === 'reasoning') &&
+        c.text?.value?.trim()
+      )
+        return false
+      if (c.type === 'image_url' && c.image_url?.url) return false
+      if (c.type === 'input_audio' && c.input_audio?.data) return false
+      if (c.type === 'input_video' && c.input_video?.data) return false
+      if (c.type === 'tool_call') return false
+    }
+    return true
+  },
 }))
 
 vi.mock('@/lib/completion', () => ({
@@ -482,10 +528,10 @@ describe('ThreadDetail route', () => {
     expect(result.threadModel).toBeUndefined()
   })
 
-  it('renders header, model dropdown, and chat input', () => {
+  it('renders the header, the chat input, and the resolved model', () => {
     renderComponent()
     expect(screen.getByTestId('header-page')).toBeInTheDocument()
-    expect(screen.getByTestId('model-dropdown')).toHaveTextContent('gpt-x')
+    expect(screen.getByTestId('chat-model')).toHaveTextContent('gpt-x')
     expect(screen.getByTestId('chat-input')).toBeInTheDocument()
     expect(screen.getByTestId('chat-status')).toHaveTextContent('ready')
   })
@@ -511,6 +557,74 @@ describe('ThreadDetail route', () => {
     renderComponent()
     expect(screen.getByTestId('message-m-a')).toBeInTheDocument()
     expect(screen.getByTestId('message-m-b')).toBeInTheDocument()
+  })
+
+  it('new-chat greeting gets the live character portrait when unstamped', () => {
+    h.threadsState.threads['thread-1'].assistants = [
+      {
+        id: 'char-1',
+        name: 'Aiko',
+        kind: 'roleplay',
+        avatar: 'data:image/png;base64,AAAA',
+      },
+    ]
+    h.chatState.messages = [
+      {
+        id: 'g1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Hello there.' }],
+        metadata: { parentId: null, createdAt: new Date() },
+      },
+    ]
+    renderComponent()
+    expect(screen.getByTestId('message-g1')).toHaveAttribute(
+      'data-char-avatar',
+      'data:image/png;base64,AAAA'
+    )
+  })
+
+  it('a stamped user turn switches the portrait for later replies', () => {
+    h.threadsState.threads['thread-1'].assistants = [
+      {
+        id: 'char-1',
+        name: 'Aiko',
+        kind: 'roleplay',
+        avatar: 'data:image/png;base64,AAAA',
+      },
+    ]
+    h.chatState.messages = [
+      {
+        id: 'g1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Hello there.' }],
+        metadata: { parentId: null, createdAt: new Date() },
+      },
+      {
+        id: 'u1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'hi' }],
+        metadata: {
+          characterId: 'char-2',
+          personaId: 'persona-1',
+          createdAt: new Date(),
+        },
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'yo' }],
+        metadata: { createdAt: new Date() },
+      },
+    ]
+    renderComponent()
+    expect(screen.getByTestId('message-g1')).toHaveAttribute(
+      'data-char-avatar',
+      'data:image/png;base64,AAAA'
+    )
+    expect(screen.getByTestId('message-a1')).toHaveAttribute(
+      'data-char-avatar',
+      ''
+    )
   })
 
   it('submits user text via ChatInput -> sendMessage', async () => {
@@ -553,21 +667,19 @@ describe('ThreadDetail route', () => {
     expect(h.mockRegenerate).toHaveBeenCalledWith({ messageId: 'a1' })
   })
 
-  it('edit on a user message forks a new version and regenerates', () => {
+  it('edit on a user message overwrites it in place without regenerating', () => {
     h.chatState.messages = [
       { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
       { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'hello' }] },
     ]
     renderComponent()
     screen.getByTestId('edit-u1').click()
-    // A new sibling version is added; the original branch is not deleted.
-    expect(h.messagesState.addMessage).toHaveBeenCalled()
+    // In-place, same as assistant edits: the same row is rewritten, the
+    // rendered path is resynced from the store, and nothing is generated.
+    expect(h.messagesState.addMessage).not.toHaveBeenCalled()
     expect(h.messagesState.updateMessage).toHaveBeenCalled()
     expect(h.mockSetChatMessages).toHaveBeenCalled()
-    expect(h.messagesState.deleteMessage).not.toHaveBeenCalled()
-    expect(h.mockRegenerate).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: expect.any(String) })
-    )
+    expect(h.mockRegenerate).not.toHaveBeenCalled()
   })
 
   it('edit on an assistant message updates without regenerating', () => {
@@ -578,6 +690,53 @@ describe('ThreadDetail route', () => {
     renderComponent()
     screen.getByTestId('edit-a1').click()
     expect(h.messagesState.updateMessage).toHaveBeenCalled()
+    expect(h.mockRegenerate).not.toHaveBeenCalled()
+  })
+
+  it('fork duplicates an assistant reply as a childless version (no generation)', () => {
+    const branched = [
+      {
+        id: 'u1',
+        role: 'user',
+        created_at: 1,
+        content: [{ type: 'text', text: { value: 'q1', annotations: [] } }],
+        metadata: { parentId: null },
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        created_at: 2,
+        content: [{ type: 'text', text: { value: 'r1', annotations: [] } }],
+        metadata: { parentId: 'u1' },
+      },
+      {
+        id: 'u2',
+        role: 'user',
+        created_at: 3,
+        content: [{ type: 'text', text: { value: 'q2', annotations: [] } }],
+        metadata: { parentId: 'a1' },
+      },
+    ]
+    h.messagesState.getMessages = vi.fn(() => branched)
+    h.chatState.messages = [
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'q1' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'r1' }] },
+      { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'q2' }] },
+    ]
+    renderComponent()
+
+    screen.getByTestId('fork-a1').click()
+
+    // The copy is a new sibling with identical content and no children --
+    // nothing was moved, so u2 stays attached to the original.
+    const copy = h.messagesState.addMessage.mock.calls[0][0]
+    expect(copy.id).toBe('gen-id')
+    expect(copy.metadata.parentId).toBe('u1')
+    expect(copy.content[0].text.value).toBe('r1')
+    const reparented = h.messagesState.updateMessage.mock.calls
+      .map((c: any[]) => c[0])
+      .find((m: any) => m.id === 'u2')
+    expect(reparented).toBeUndefined()
     expect(h.mockRegenerate).not.toHaveBeenCalled()
   })
 
@@ -963,6 +1122,101 @@ describe('ThreadDetail route', () => {
     screen.getByTestId('del-u1').click()
     expect(h.messagesState.deleteMessage).toHaveBeenCalledWith('thread-1', 'u1')
     expect(h.mockSetChatMessages).toHaveBeenCalled()
+  })
+
+  describe('delete splices the tree (no ghost resurrection)', () => {
+    // Live store mock: getMessages reflects deletions, like the real zustand
+    // store does. Static mocks would mask stale-closure bugs because
+    // syncActivePath would always read the same array.
+    const seedBranched = () => {
+      const store: any[] = [
+        {
+          id: 'u1',
+          role: 'user',
+          created_at: 1,
+          content: [{ type: 'text', text: { value: 'q1', annotations: [] } }],
+          metadata: { parentId: null },
+        },
+        {
+          id: 'a1',
+          role: 'assistant',
+          created_at: 2,
+          content: [{ type: 'text', text: { value: 'r1', annotations: [] } }],
+          metadata: { parentId: 'u1' },
+        },
+        {
+          id: 'u2',
+          role: 'user',
+          created_at: 3,
+          content: [{ type: 'text', text: { value: 'q2', annotations: [] } }],
+          metadata: { parentId: 'a1' },
+        },
+      ]
+      h.messagesState.getMessages = vi.fn(() => [...store])
+      h.messagesState.deleteMessage = vi.fn((_tid: string, id: string) => {
+        const i = store.findIndex((m) => m.id === id)
+        if (i !== -1) store.splice(i, 1)
+      })
+      return store
+    }
+
+    const ui = () =>
+      ([
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'q1' }] },
+        { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'r1' }] },
+        { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'q2' }] },
+      ] as any[])
+
+    it('deleting mid-path splices children up and keeps the path continuous', () => {
+      seedBranched()
+      h.chatState.messages = ui()
+      renderComponent()
+
+      screen.getByTestId('del-a1').click()
+
+      const reparented = h.messagesState.updateMessage.mock.calls
+        .map((c: any[]) => c[0])
+        .find((m: any) => m.id === 'u2')
+      expect(reparented).toBeTruthy()
+      expect(reparented.metadata.parentId).toBe('u1')
+      const pinnedParent = h.messagesState.updateMessage.mock.calls
+        .map((c: any[]) => c[0])
+        .find((m: any) => m.id === 'u1')
+      expect(pinnedParent.metadata.activeChildId).toBe('u2')
+    })
+
+    it('rapid successive deletes rebuild from the store each time (no stale-list overwrite)', () => {
+      seedBranched()
+      h.chatState.messages = [
+        { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'q1' }] },
+        { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'r1' }] },
+        { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'q2' }] },
+      ]
+      renderComponent()
+
+      // Two deletes in one tick: the second must not resurrect the first.
+      screen.getByTestId('del-a1').click()
+      screen.getByTestId('del-u2').click()
+
+      const lastRenderedList = h.mockSetChatMessages.mock.calls.at(
+        -1
+      )[0] as any[]
+      expect(lastRenderedList.map((m: any) => m.id)).toEqual(['u1'])
+    })
+
+    it('edits and deletes are no-ops while generating', () => {
+      seedBranched()
+      h.chatState.status = 'streaming'
+      h.chatState.messages = ui()
+      renderComponent()
+
+      screen.getByTestId('del-a1').click()
+      screen.getByTestId('edit-a1').click()
+
+      expect(h.messagesState.deleteMessage).not.toHaveBeenCalled()
+      expect(h.messagesState.addMessage).not.toHaveBeenCalled()
+      expect(h.messagesState.updateMessage).not.toHaveBeenCalled()
+    })
   })
 
   it('shows PromptProgress while status is submitted', () => {

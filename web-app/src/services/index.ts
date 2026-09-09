@@ -13,7 +13,6 @@ import { DefaultWindowService } from './window/default'
 import { DefaultEventsService } from './events/default'
 import { DefaultHardwareService } from './hardware/default'
 import { DefaultAppService } from './app/default'
-import { DefaultAnalyticService } from './analytic/default'
 import { DefaultMessagesService } from './messages/default'
 import { DefaultMCPService } from './mcp/default'
 import { DefaultThreadsService } from './threads/default'
@@ -29,6 +28,10 @@ import { DefaultDeepLinkService } from './deeplink/default'
 import { DefaultProjectsService } from './projects/default'
 import { DefaultRAGService } from './rag/default'
 import type { RAGService } from './rag/types'
+import { DefaultLorebooksService } from './lorebooks/default'
+import type { LorebooksService } from './lorebooks/types'
+import { DefaultPersonasService } from './personas/default'
+import type { PersonasService } from './personas/types'
 import { DefaultUploadsService } from './uploads/default'
 import type { UploadsService } from './uploads/types'
 
@@ -38,7 +41,6 @@ import type { WindowService } from './window/types'
 import type { EventsService } from './events/types'
 import type { HardwareService } from './hardware/types'
 import type { AppService } from './app/types'
-import type { AnalyticService } from './analytic/types'
 import type { MessagesService } from './messages/types'
 import type { MCPService } from './mcp/types'
 import type { ThreadsService } from './threads/types'
@@ -60,7 +62,6 @@ export interface ServiceHub {
   events(): EventsService
   hardware(): HardwareService
   app(): AppService
-  analytic(): AnalyticService
   messages(): MessagesService
   mcp(): MCPService
   threads(): ThreadsService
@@ -76,6 +77,8 @@ export interface ServiceHub {
   projects(): ProjectsService
   rag(): RAGService
   uploads(): UploadsService
+  lorebooks(): LorebooksService
+  personas(): PersonasService
 }
 
 class PlatformServiceHub implements ServiceHub {
@@ -84,7 +87,6 @@ class PlatformServiceHub implements ServiceHub {
   private eventsService: EventsService = new DefaultEventsService()
   private hardwareService: HardwareService = new DefaultHardwareService()
   private appService: AppService = new DefaultAppService()
-  private analyticService: AnalyticService = new DefaultAnalyticService()
   private messagesService: MessagesService = new DefaultMessagesService()
   private mcpService: MCPService = new DefaultMCPService()
   private threadsService: ThreadsService = new DefaultThreadsService()
@@ -100,6 +102,8 @@ class PlatformServiceHub implements ServiceHub {
   private projectsService: ProjectsService = new DefaultProjectsService()
   private ragService: RAGService = new DefaultRAGService()
   private uploadsService: UploadsService = new DefaultUploadsService()
+  private lorebooksService: LorebooksService = new DefaultLorebooksService()
+  private personasService: PersonasService = new DefaultPersonasService()
   private initialized = false
 
   /**
@@ -244,11 +248,6 @@ class PlatformServiceHub implements ServiceHub {
     return this.appService
   }
 
-  analytic(): AnalyticService {
-    this.ensureInitialized()
-    return this.analyticService
-  }
-
   messages(): MessagesService {
     this.ensureInitialized()
     return this.messagesService
@@ -322,6 +321,16 @@ class PlatformServiceHub implements ServiceHub {
   uploads(): UploadsService {
     this.ensureInitialized()
     return this.uploadsService
+  }
+
+  lorebooks(): LorebooksService {
+    this.ensureInitialized()
+    return this.lorebooksService
+  }
+
+  personas(): PersonasService {
+    this.ensureInitialized()
+    return this.personasService
   }
 }
 

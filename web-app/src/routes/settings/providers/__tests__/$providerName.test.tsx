@@ -280,6 +280,7 @@ vi.mock('@/components/ui/switch', () => ({
 }))
 
 vi.mock('@tabler/icons-react', () => ({
+  IconChevronRight: () => <span />,
   IconFolderPlus: () => <span />,
   IconInfoCircle: () => <span />,
   IconLoader: () => <span />,

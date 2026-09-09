@@ -85,6 +85,7 @@ export function EditMessageDialog({
       size="icon-xs"
       role="button"
       tabIndex={0}
+      title={t('chat:actions.edit')}
       disabled={!selectedModel}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {

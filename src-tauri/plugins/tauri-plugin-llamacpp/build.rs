@@ -14,6 +14,9 @@ const COMMANDS: &[&str] = &[
     "router_slots_idle",
     "router_health",
     "adopt_router",
+    // Calibration probe
+    "calibrate_model",
+    "cancel_calibrate",
     "get_devices",
     "generate_api_key",
     "is_process_running",

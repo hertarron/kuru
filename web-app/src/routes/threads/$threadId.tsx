@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createFileRoute, useParams, useSearch } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
+import {
+  CONTENT_COLUMN,
+  FADE_TOP_CLEARANCE,
+  FADE_TOP_MASK,
+} from '@/constants/layout'
 
 import HeaderPage from '@/containers/HeaderPage'
 import { useThreads } from '@/hooks/useThreads'
@@ -18,7 +23,19 @@ import { SESSION_STORAGE_PREFIX } from '@/constants/chat'
 import { useChat } from '@/hooks/use-chat'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { useInterfaceSettings } from '@/hooks/useInterfaceSettings'
-import { renderInstructions } from '@/lib/instructionTemplate'
+import { useGeneralSetting } from '@/hooks/useGeneralSetting'
+import { usePersonas } from '@/hooks/usePersonas'
+import { resolvePersona } from '@/lib/persona-selection'
+import { buildCharacterSystemPrompt } from '@/lib/character-prompt'
+import { isRoleplayCharacter } from '@/lib/character-card'
+import {
+  isPortraitImage,
+  portraitsByMessageId,
+} from '@/lib/scene-portraits'
+import {
+  useCharacters,
+  resolveThreadCharacter,
+} from '@/hooks/useCharacters'
 import {
   Conversation,
   ConversationContent,
@@ -46,7 +63,11 @@ import {
   hasBranching,
   repairDetachedAssistants,
   planContinuation,
+  planSplice,
+  planUserDeleteWrites,
+  inPlaceEditContent,
 } from '@/lib/message-branching'
+import { filterDeletedMessages } from '@/lib/message-tombstones'
 import {
   ThreadMessage,
   MessageStatus,
@@ -77,12 +98,12 @@ import { useToolApproval } from '@/hooks/useToolApproval'
 import { useToolApprovalRequests } from '@/hooks/useToolApprovalRequests'
 import { useToolCallRuntime } from '@/hooks/useToolCallRuntime'
 import { WEB_TOOL_NAMES, executeWebTool } from '@/lib/webSearchTool'
-import DropdownModelProvider from '@/containers/DropdownModelProvider'
 import { ExtensionTypeEnum, VectorDBExtension } from '@janhq/core'
 import { ExtensionManager } from '@/lib/extension'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 import { useMessageQueue } from '@/stores/message-queue-store'
 import { generateThreadTitle } from '@/lib/thread-title-summarizer'
+import { maybeAutoFold } from '@/lib/memory-runner'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 
 const CHAT_STATUS = {
@@ -200,12 +221,52 @@ function ThreadDetail() {
   const threadRef = useRef(thread)
   const projectId = threadRef.current?.metadata?.project?.id
 
-  // Get system message from thread's assistant instructions (if thread has an assigned assistant)
-  // Only use assistant instructions if the thread was created with one (e.g., via a project)
-  const threadAssistant = thread?.assistants?.[0]
-  const systemMessage = threadAssistant?.instructions
-    ? renderInstructions(threadAssistant.instructions)
+  // Compose the system message from the thread's character (if any).
+  // Threads embed a copy of the character at attach time; resolve it against
+  // the live characters store so edits to the character flow into existing
+  // threads. {{user}} resolves to the chat's persona.
+  const characters = useCharacters((s) => s.characters)
+  const threadCharacter = resolveThreadCharacter(thread, characters)
+  const personas = usePersonas((s) => s.personas)
+  const activePersonaId = useGeneralSetting((s) => s.activePersonaId)
+  const userName = useGeneralSetting((s) => s.userName)
+  const persona = useMemo(
+    () =>
+      resolvePersona({
+        library: personas,
+        activeId: activePersonaId,
+        threadState: thread?.metadata?.persona,
+      }),
+    [personas, activePersonaId, thread?.metadata?.persona]
+  )
+  const systemMessage = buildCharacterSystemPrompt(threadCharacter, {
+    userName,
+    persona,
+  })
+
+  // The live pick, for turns that carry no stamp of their own.
+  const charAvatarUrl = isPortraitImage(threadCharacter?.avatar)
+    ? threadCharacter.avatar
     : undefined
+  const userAvatarUrl = isPortraitImage(persona?.avatar)
+    ? persona.avatar
+    : undefined
+  // A coding character has no persona in the scene -- no user portrait at
+  // all, placeholder included.
+  const userAvatarHidden = !isRoleplayCharacter(threadCharacter)
+
+  // Stamp who was in the seat when a turn was sent -- character AND persona --
+  // so portraits stay attached to their era of the chat after a mid-chat
+  // switch. Every path that writes a user turn has to go through this.
+  const stampScene = useCallback(
+    (metadata: Record<string, unknown> | undefined) => {
+      const stamped: Record<string, unknown> = { ...(metadata ?? {}) }
+      if (threadCharacter?.id) stamped.characterId = threadCharacter.id
+      if (persona?.id) stamped.personaId = persona.id
+      return stamped
+    },
+    [threadCharacter?.id, persona?.id]
+  )
 
   useEffect(() => {
     threadRef.current = thread
@@ -340,6 +401,18 @@ function ThreadDetail() {
       // appears without waiting for a reload.
       const isStoppedTurn = isAbort || finishReason === 'length'
 
+      // A stopped turn never reports usage through the stream. Token counts are
+      // read per message so they follow the active branch, so carry the last
+      // live measurement onto this reply before dropping it — otherwise the
+      // aborted turn looks free, and the stale live numbers would keep being
+      // shown for every branch of the thread.
+      const finalLiveStats =
+        useAppState.getState().liveTokenStatsByThread?.[threadId]
+      useAppState.getState().updateThreadLiveTokenStats?.(threadId, undefined)
+      if (useAppState.getState().currentStreamThreadId === threadId) {
+        useAppState.getState().updateLiveTokenStats?.(undefined)
+      }
+
       // Persist assistant message to backend (skip if aborted).
       // For continuations, message.parts already contains partial + new content
       // because the stream wrapper prepended the partial text as the first delta.
@@ -348,9 +421,22 @@ function ThreadDetail() {
         uiMessageHasMeaningfulContent(message)
       ) {
         const contentParts = extractContentPartsFromUIMessage(message)
+        const existingUsage = (message.metadata as Record<string, unknown>)
+          ?.usage
         const messageMetadata = {
           ...((message.metadata || {}) as Record<string, unknown>),
           ...(isStoppedTurn ? { stopped: true } : {}),
+          ...(!existingUsage && finalLiveStats
+            ? {
+                usage: {
+                  inputTokens: finalLiveStats.promptTokens,
+                  outputTokens: finalLiveStats.completionTokens,
+                  totalTokens:
+                    finalLiveStats.promptTokens +
+                    finalLiveStats.completionTokens,
+                },
+              }
+            : {}),
         }
 
         if (isStoppedTurn) {
@@ -653,6 +739,11 @@ function ThreadDetail() {
             })()
           }
         }
+
+        // Memory folding runs after the generation lands, never before one.
+        // Stopped turns (user Stop, output cap) defer a turn so a partial
+        // reply is never summarized into a chapter.
+        if (!isStoppedTurn) maybeAutoFold(threadId)
       }
     },
     onToolCall: ({ toolCall }) => {
@@ -684,6 +775,30 @@ function ThreadDetail() {
     },
     sendAutomaticallyWhen: followUpMessage,
   })
+
+  // The character portrait sits above assistant turns, the persona portrait
+  // above user turns. Both walk the same stamps; see `scene-portraits`.
+  const charAvatarByMessageId = useMemo(
+    () =>
+      portraitsByMessageId(chatMessages, {
+        stampKey: 'characterId',
+        library: characters,
+        fallback: charAvatarUrl,
+        rendersOn: (role) => role === 'assistant',
+      }),
+    [chatMessages, charAvatarUrl, characters]
+  )
+
+  const userAvatarByMessageId = useMemo(
+    () =>
+      portraitsByMessageId(chatMessages, {
+        stampKey: 'personaId',
+        library: personas,
+        fallback: userAvatarUrl,
+        rendersOn: (role) => role === 'user',
+      }),
+    [chatMessages, userAvatarUrl, personas]
+  )
 
   // Our error banners (oom/backend/context) can arrive out-of-band for the
   // router path, leaving the SDK stream stuck at 'submitted' so the
@@ -787,76 +902,82 @@ function ThreadDetail() {
     serviceHub
       .messages()
       .fetchMessages(threadId)
-      .then((fetchedMessages) => {
-        if (fetchedMessages && fetchedMessages.length > 0) {
-          const currentLocalMessages = useMessages
-            .getState()
-            .getMessages(threadId)
+      .then((fetched) => {
+        // A fetch can race an in-flight delete (persistence is async) and
+        // read the row before the delete lands on disk. Tombstones keep
+        // deleted messages from riding back into the store and UI.
+        const fetchedMessages = filterDeletedMessages(fetched ?? [])
+        const currentLocalMessages = useMessages
+          .getState()
+          .getMessages(threadId)
 
-          let messagesToSet = fetchedMessages
+        // Union of disk + local-only messages. The local side matters right
+        // after thread creation: seeded greetings are added to the store and
+        // persisted via async IPC, so the first fetch here often reads an
+        // empty/partial disk. Skipping the sync when the fetch comes back
+        // empty used to drop them from the UI and the model context.
+        const fetchedIds = new Set(fetchedMessages.map((m) => m.id))
+        const localOnlyMessages = currentLocalMessages.filter(
+          (m) => !fetchedIds.has(m.id)
+        )
+        let messagesToSet = [...fetchedMessages, ...localOnlyMessages].sort(
+          (a, b) => (a.created_at || 0) - (b.created_at || 0)
+        )
 
-          // Merge with local-only messages if needed
-          if (currentLocalMessages && currentLocalMessages.length > 0) {
-            const fetchedIds = new Set(fetchedMessages.map((m) => m.id))
-            const localOnlyMessages = currentLocalMessages.filter(
-              (m) => !fetchedIds.has(m.id)
-            )
+        if (messagesToSet.length === 0) return
 
-            if (localOnlyMessages.length > 0) {
-              messagesToSet = [...fetchedMessages, ...localOnlyMessages].sort(
-                (a, b) => (a.created_at || 0) - (b.created_at || 0)
-              )
-            }
-          }
-
-          // Drop and delete any persisted empty assistant rows produced by
-          // the old bug where errored generations were written as empty-text
-          // messages. Lossless cleanup — these carry no information.
-          const emptyAssistantIds = messagesToSet
-            .filter(threadMessageIsEmpty)
-            .map((m) => m.id)
-          if (emptyAssistantIds.length > 0) {
-            messagesToSet = messagesToSet.filter(
-              (m) => !emptyAssistantIds.includes(m.id)
-            )
-            for (const id of emptyAssistantIds) {
-              deleteMessage(threadId, id)
-            }
-          }
-
-          // Migrate threads corrupted by the pre-#8357 bug: assistant replies
-          // saved with parentId:null are phantom roots that computeActivePath
-          // drops. Re-parent them to the user turn they answer and persist.
-          const repaired = repairDetachedAssistants(messagesToSet)
-          if (repaired.length > 0) {
-            const byId = new Map(repaired.map((m) => [m.id, m]))
-            messagesToSet = messagesToSet.map((m) => byId.get(m.id) ?? m)
-            for (const m of repaired) updateMessage(m)
-          }
-
-          setMessages(threadId, messagesToSet)
-
-          const hydrated: Record<string, string> = {}
-          for (const m of messagesToSet) {
-            const err = (m.metadata as Record<string, unknown> | undefined)
-              ?.error
-            if (typeof err === 'string' && err.length > 0) {
-              hydrated[m.id] = err
-            }
-          }
-          useMessageErrors.getState().hydrate(hydrated)
-
-          const activeRootId = (
-            useThreads.getState().threads[threadId]?.metadata as
-              | Record<string, unknown>
-              | undefined
-          )?.activeRootId as string | undefined
-          const uiMessages = convertThreadMessagesToUIMessages(
-            computeActivePath(messagesToSet, activeRootId)
+        // Drop and delete any persisted empty assistant rows produced by
+        // the old bug where errored generations were written as empty-text
+        // messages. Lossless cleanup — these carry no information.
+        const emptyAssistantIds = messagesToSet
+          .filter(threadMessageIsEmpty)
+          .map((m) => m.id)
+        if (emptyAssistantIds.length > 0) {
+          messagesToSet = messagesToSet.filter(
+            (m) => !emptyAssistantIds.includes(m.id)
           )
-          setChatMessages(uiMessages)
-          currentThread.current = threadId
+          for (const id of emptyAssistantIds) {
+            deleteMessage(threadId, id)
+          }
         }
+
+        // Migrate threads corrupted by the pre-#8357 bug: assistant replies
+        // saved with parentId:null are phantom roots that computeActivePath
+        // drops. Re-parent them to the user turn they answer and persist.
+        const repaired = repairDetachedAssistants(messagesToSet)
+        if (repaired.length > 0) {
+          const byId = new Map(repaired.map((m) => [m.id, m]))
+          messagesToSet = messagesToSet.map((m) => byId.get(m.id) ?? m)
+          for (const m of repaired) updateMessage(m)
+        }
+
+        setMessages(threadId, messagesToSet)
+
+        const hydrated: Record<string, string> = {}
+        for (const m of messagesToSet) {
+          const err = (m.metadata as Record<string, unknown> | undefined)
+            ?.error
+          if (typeof err === 'string' && err.length > 0) {
+            hydrated[m.id] = err
+          }
+        }
+        // Skip empty hydrates: a state write here re-renders the route, which
+        // can disrupt an in-flight tool-call flow that started before this
+        // async fetch resolved.
+        if (Object.keys(hydrated).length > 0) {
+          useMessageErrors.getState().hydrate(hydrated)
+        }
+
+        const activeRootId = (
+          useThreads.getState().threads[threadId]?.metadata as
+            | Record<string, unknown>
+            | undefined
+        )?.activeRootId as string | undefined
+        const uiMessages = convertThreadMessagesToUIMessages(
+          computeActivePath(messagesToSet, activeRootId)
+        )
+        setChatMessages(uiMessages)
+        currentThread.current = threadId
       })
       .catch((error) =>
         console.error('Failed to fetch messages for thread:', threadId, error)
@@ -1062,22 +1183,44 @@ function ThreadDetail() {
       // Once a thread has branches, link new turns into the active path so the
       // assistant reply attaches to this message. Legacy threads stay linear.
       const branchedMessages = useMessages.getState().getMessages(threadId)
+      const activeRootId = (
+        useThreads.getState().threads[threadId]?.metadata as
+          | Record<string, unknown>
+          | undefined
+      )?.activeRootId as string | undefined
+      // Active path regardless of branching (legacy threads pass through).
+      // Computed BEFORE the user message is added so it holds the ancestors.
+      const activePath = computeActivePath(branchedMessages, activeRootId)
       let userMessage = baseUserMessage
+      const userMeta = stampScene(
+        baseUserMessage.metadata as Record<string, unknown> | undefined
+      )
       if (hasBranching(branchedMessages)) {
-        const activeRootId = (
-          useThreads.getState().threads[threadId]?.metadata as
-            | Record<string, unknown>
-            | undefined
-        )?.activeRootId as string | undefined
-        const path = computeActivePath(branchedMessages, activeRootId)
-        const parentId = path.length ? path[path.length - 1].id : null
+        const parentId = activePath.length
+          ? activePath[activePath.length - 1].id
+          : null
         userMessage = {
           ...baseUserMessage,
-          metadata: { ...(baseUserMessage.metadata ?? {}), parentId },
+          metadata: { ...userMeta, parentId },
         }
         pendingAssistantParentId.current = messageId
+      } else {
+        userMessage = { ...baseUserMessage, metadata: userMeta }
       }
       addMessage(userMessage)
+
+      // Model-context completeness guard: the AI SDK's message list can lag
+      // the store here — seeded greetings hydrate into it asynchronously on
+      // mount, and the auto-sent first message can fire before that lands.
+      // Without this, the greeting is visible in the UI but never reaches
+      // the model (or the context visualizer). Prepend missing ancestors.
+      setChatMessages((prev) => {
+        const have = new Set(prev.map((m) => m.id))
+        const missing = convertThreadMessagesToUIMessages(activePath).filter(
+          (m) => !have.has(m.id)
+        )
+        return missing.length > 0 ? [...missing, ...prev] : prev
+      })
 
       // Build parts for AI SDK. Derive media file parts from the resolved
       // attachments (not the raw `files` arg) so the first-message flow — where
@@ -1112,6 +1255,7 @@ function ThreadDetail() {
       sendMessage,
       threadId,
       thread,
+      stampScene,
       addMessage,
       getAttachments,
       attachmentsKey,
@@ -1127,7 +1271,11 @@ function ThreadDetail() {
   const sendQueuedMessage = useCallback(
     async (text: string) => {
       const messageId = generateId()
-      const userMessage = newUserThreadContent(threadId, text, [], messageId)
+      const base = newUserThreadContent(threadId, text, [], messageId)
+      const userMessage = {
+        ...base,
+        metadata: stampScene(base.metadata as Record<string, unknown>),
+      }
       addMessage(userMessage)
 
       sendMessage({
@@ -1136,7 +1284,7 @@ function ThreadDetail() {
         metadata: userMessage.metadata,
       })
     },
-    [sendMessage, threadId, addMessage]
+    [sendMessage, threadId, addMessage, stampScene]
   )
 
   // Check for and send initial message from sessionStorage
@@ -1268,9 +1416,38 @@ function ThreadDetail() {
     )
   }, [threadId, setChatMessages])
 
+  // The mount hydrate can run before the thread list finishes loading (any
+  // hard refresh), leaving `activeRootId` unknown; computeActivePath then falls
+  // back to the newest root, so a thread with seeded greetings opens on the
+  // last variant instead of the one that was actually played — and the token
+  // counter reads 0 because that dead-end path holds no reply usage. Rebuild
+  // once the thread lands.
+  const threadActiveRootId = (
+    thread?.metadata as Record<string, unknown> | undefined
+  )?.activeRootId as string | undefined
+  // Rebuild once per root: `status` is in the dep list only to skip a rebuild
+  // mid-stream, and re-running on every turn would clobber the live message
+  // list with whatever the store has.
+  const syncedRootRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!threadActiveRootId) return
+    if (syncedRootRef.current === threadActiveRootId) return
+    if (status === CHAT_STATUS.SUBMITTED || status === CHAT_STATUS.STREAMING)
+      return
+    if (useMessages.getState().getMessages(threadId).length === 0) return
+    syncedRootRef.current = threadActiveRootId
+    syncActivePath()
+  }, [threadActiveRootId, threadId, status, syncActivePath])
+
   // Switch the visible version of a message (the `< n/m >` control).
   const handleSwitchVersion = useCallback(
     (messageId: string, dir: -1 | 1) => {
+      // Rebuilding the path mid-generation would clobber the in-flight stream.
+      if (
+        status === CHAT_STATUS.SUBMITTED ||
+        status === CHAT_STATUS.STREAMING
+      )
+        return
       const msgs = useMessages.getState().getMessages(threadId)
       const target = msgs.find((m) => m.id === messageId)
       if (!target) return
@@ -1284,7 +1461,7 @@ function ThreadDetail() {
       setActiveBranch(next)
       syncActivePath()
     },
-    [threadId, setActiveBranch, syncActivePath, clearBannerErrors]
+    [threadId, setActiveBranch, syncActivePath, clearBannerErrors, status]
   )
 
   // Resolve the user message that an assistant reply hangs off of.
@@ -1368,10 +1545,18 @@ function ThreadDetail() {
     [chatMessages, setContinueFromContent, handleRegenerate]
   )
 
-  // Editing forks a new sibling version (the original + its subtree are kept).
-  // User edits regenerate a reply for the new branch; assistant edits don't.
+  // Editing overwrites the message in place -- same node, same children, no
+  // versions, no regeneration (user and assistant messages behave alike). To
+  // explore alternative answers, regenerate the turn instead.
   const handleEditMessage = useCallback(
     (messageId: string, newText: string) => {
+      // Editing mid-generation would splice the tree under the in-flight
+      // stream; wait for the turn to settle.
+      if (
+        status === CHAT_STATUS.SUBMITTED ||
+        status === CHAT_STATUS.STREAMING
+      )
+        return
       const msgs = ensureBranched()
       const target = msgs.find((m) => m.id === messageId)
       if (!target) return
@@ -1380,45 +1565,156 @@ function ThreadDetail() {
       titleAbortRef.current?.abort()
       titleAbortRef.current = null
 
-      const newId = generateId()
-      const sibling = makeSibling(target, {
-        id: newId,
-        createdAt: Date.now(),
-        text: newText,
-      })
-      addMessage(sibling)
-      setActiveBranch(sibling)
+      updateMessage(inPlaceEditContent(target, newText))
+      syncActivePath()
+    },
+    [ensureBranched, updateMessage, syncActivePath, status]
+  )
 
-      if (target.role === 'user') {
-        pendingAssistantParentId.current = newId
-        syncActivePath()
-        regenerate({ messageId: newId })
-      } else {
-        syncActivePath()
-      }
+  // Fork duplicates a reply as a childless sibling version -- no generation.
+  // The original keeps its entire subtree, so switching versions just moves
+  // between independent branches. Edit or regenerate the copy from there.
+  const handleFork = useCallback(
+    (messageId: string) => {
+      if (
+        status === CHAT_STATUS.SUBMITTED ||
+        status === CHAT_STATUS.STREAMING
+      )
+        return
+      const msgs = ensureBranched()
+      const target = msgs.find((m) => m.id === messageId)
+      if (!target) return
+
+      titleAbortRef.current?.abort()
+      titleAbortRef.current = null
+
+      const copy = makeSibling(target, {
+        id: generateId(),
+        createdAt: Date.now(),
+      })
+      addMessage(copy)
+      setActiveBranch(copy)
+      syncActivePath()
     },
     [
       ensureBranched,
       addMessage,
       setActiveBranch,
       syncActivePath,
-      regenerate,
+      status,
     ]
   )
 
-  // Handle delete message
+  // Deleting splices the node out of the tree: direct children are re-parented
+  // to the grandparent so the conversation stays continuous, and when the node
+  // sat on the active path its slot is handed to a promoted child (its own
+  // preferred child if it had one, else the newest). The UI is rebuilt from
+  // the recomputed active path instead of filtering a captured list —
+  // filtering from a stale closure is what resurrected previously-deleted
+  // messages, and the tombstone set keeps async persistence races from
+  // merging deleted rows back in on refetch.
   const handleDeleteMessage = useCallback(
     (messageId: string) => {
-      deleteMessage(threadId, messageId)
+      // Tree surgery mid-generation would pull the rug out from under the
+      // in-flight stream.
+      if (
+        status === CHAT_STATUS.SUBMITTED ||
+        status === CHAT_STATUS.STREAMING
+      )
+        return
+      const msgs = ensureBranched()
+      const target = msgs.find((m) => m.id === messageId)
+      if (!target) return
+
       useMessageErrors.getState().clearError(messageId)
 
-      // Update chat messages for UI
-      const updatedChatMessages = chatMessages.filter(
-        (msg) => msg.id !== messageId
-      )
-      setChatMessages(updatedChatMessages)
+      // Pair-delete: removing a user turn takes its paired replies with it,
+      // so an answer never survives pointing at a question that's gone.
+      if (target.role === 'user') {
+        const plan = planUserDeleteWrites(msgs, target)
+        plan.reparented.forEach((m) => updateMessage(m))
+
+        const activeRootId = (
+          useThreads.getState().threads[threadId]?.metadata as
+            | Record<string, unknown>
+            | undefined
+        )?.activeRootId as string | undefined
+        const onActivePath = computeActivePath(msgs, activeRootId).some(
+          (m) => m.id === messageId
+        )
+        if (onActivePath && plan.promotedChildId) {
+          if (plan.wasRootTurn) {
+            const t = useThreads.getState().threads[threadId]
+            useThreads.getState().updateThread(threadId, {
+              metadata: {
+                ...((t?.metadata as Record<string, unknown> | undefined) ?? {}),
+                activeRootId: plan.promotedChildId,
+              },
+            })
+          } else {
+            const turnParentId = getParentId(target)
+            const turnParent = msgs.find((m) => m.id === turnParentId)
+            if (turnParent) {
+              updateMessage(withActiveChild(turnParent, plan.promotedChildId))
+            }
+          }
+        }
+
+        deleteMessage(threadId, messageId)
+        for (const replyId of plan.doomedReplyIds) {
+          useMessageErrors.getState().clearError(replyId)
+          deleteMessage(threadId, replyId)
+        }
+        syncActivePath()
+        return
+      }
+
+      if (hasBranching(msgs)) {
+        const activeRootId = (
+          useThreads.getState().threads[threadId]?.metadata as
+            | Record<string, unknown>
+            | undefined
+        )?.activeRootId as string | undefined
+        const onActivePath = computeActivePath(
+          msgs,
+          activeRootId
+        ).some((m) => m.id === messageId)
+
+        const plan = planSplice(msgs, target)
+        plan.reparented.forEach((m) => updateMessage(m))
+
+        // Only re-point the active branch when the deleted node was actually
+        // on it; deleting an inactive version must not change what's shown.
+        if (onActivePath && plan.promotedChildId) {
+          const targetParentId = getParentId(target)
+          if (targetParentId === null) {
+            const t = useThreads.getState().threads[threadId]
+            useThreads.getState().updateThread(threadId, {
+              metadata: {
+                ...((t?.metadata as Record<string, unknown> | undefined) ?? {}),
+                activeRootId: plan.promotedChildId,
+              },
+            })
+          } else {
+            const parent = msgs.find((m) => m.id === targetParentId)
+            if (parent) {
+              updateMessage(withActiveChild(parent, plan.promotedChildId))
+            }
+          }
+        }
+      }
+
+      deleteMessage(threadId, messageId)
+      syncActivePath()
     },
-    [threadId, deleteMessage, chatMessages, setChatMessages]
+    [
+      threadId,
+      updateMessage,
+      ensureBranched,
+      deleteMessage,
+      syncActivePath,
+      status,
+    ]
   )
 
   // Handler for increasing context size
@@ -1674,12 +1970,11 @@ function ThreadDetail() {
   }, [localThreadMessages])
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-(env(safe-area-inset-bottom)+env(safe-area-inset-top)))]">
-      <HeaderPage>
-        <div className="flex items-center justify-between w-full pr-2">
-          <DropdownModelProvider model={threadModel} />
-        </div>
-      </HeaderPage>
+    <div className="flex flex-col h-full">
+      {/* Model, character and world info moved into the chatbox toolbar; the
+          band stays for the window drag strip and the collapsed-sidebar
+          controls HeaderPage renders itself. */}
+      <HeaderPage />
       <div className="flex flex-1 flex-col h-full overflow-hidden">
         {/* Messages Area */}
         <div
@@ -1690,9 +1985,19 @@ function ThreadDetail() {
             } as CSSProperties
           }
         >
-          <Conversation className="absolute inset-0 text-start">
+          {/* Text dissolves as it scrolls up to the top edge instead of being
+              cut off mid-line. A mask fades the content's own pixels, so it
+              works whatever colour sits behind it -- an overlay would have to
+              match the page background exactly in both themes. */}
+          <Conversation
+            className="absolute inset-0 text-start"
+            style={{
+              maskImage: FADE_TOP_MASK,
+              WebkitMaskImage: FADE_TOP_MASK,
+            }}
+          >
             <ConversationContent
-              className={cn('mx-auto w-full md:w-4/5 xl:w-4/6')}
+              className={cn(CONTENT_COLUMN, FADE_TOP_CLEARANCE)}
             >
               {chatMessages.map((message, index) => {
                 const isLastMessage = index === chatMessages.length - 1
@@ -1720,9 +2025,13 @@ function ThreadDetail() {
                     onRegenerate={handleRegenerate}
                     onContinue={handleContinue}
                     onEdit={handleEditMessage}
+                    onFork={handleFork}
                     onDelete={handleDeleteMessage}
                     versionInfo={versionInfoById[message.id]}
                     onSwitchVersion={handleSwitchVersion}
+                    charAvatarUrl={charAvatarByMessageId[message.id]}
+                    userAvatarUrl={userAvatarByMessageId[message.id]}
+                    userAvatarHidden={userAvatarHidden}
                     isAnimating={!pendingContinueMessage}
                     hideActions={!!pendingContinueMessage}
                   />
@@ -1742,6 +2051,11 @@ function ThreadDetail() {
                   onRegenerate={handleRegenerate}
                   onEdit={handleEditMessage}
                   onDelete={handleDeleteMessage}
+                  charAvatarUrl={
+                    charAvatarByMessageId[pendingContinueMessage.id] ??
+                    charAvatarUrl
+                  }
+                  userAvatarHidden={userAvatarHidden}
                   hideActions
                   isAnimating={false}
                 />
@@ -1848,8 +2162,9 @@ function ThreadDetail() {
           </Conversation>
         </div>
 
-        {/* Chat Input - Fixed at bottom */}
-        <div className="py-4 mx-auto w-full md:w-4/5 xl:w-4/6">
+        {/* Chat Input - pinned flush with the bottom of the content column,
+            which is the bottom edge of the sidebar card beside it. */}
+        <div className={cn('pt-2', CONTENT_COLUMN)}>
           <ChatInput
             model={threadModel}
             onSubmit={handleSubmit}
@@ -1861,3 +2176,4 @@ function ThreadDetail() {
     </div>
   )
 }
+

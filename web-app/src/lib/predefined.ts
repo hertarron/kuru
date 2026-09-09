@@ -169,7 +169,7 @@ export const modelSettings = {
   },
   no_kv_offload: {
     key: 'no_kv_offload',
-    title: 'Disable KV Offload',
+    title: 'Keep KV Cache in RAM',
     description: 'Disable KV cache offload to GPU (if GPU is used).',
     controller_type: 'checkbox',
     controller_props: {

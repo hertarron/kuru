@@ -105,7 +105,7 @@ describe('buildReasoningProviderOptions', () => {
           modelWith(reasoning('on'), 'claude-sonnet-4-5')
         )
       ).toEqual({
-        anthropic: { thinking: { type: 'enabled', budgetTokens: 8192 } },
+        anthropic: { thinking: { type: 'enabled', budgetTokens: 4096 } },
       })
       expect(
         buildReasoningProviderOptions(
@@ -113,7 +113,7 @@ describe('buildReasoningProviderOptions', () => {
           modelWith({ ...budget('high') }, 'claude-haiku-4-5-20251001')
         )
       ).toEqual({
-        anthropic: { thinking: { type: 'enabled', budgetTokens: 16384 } },
+        anthropic: { thinking: { type: 'enabled', budgetTokens: 8192 } },
       })
     })
   })

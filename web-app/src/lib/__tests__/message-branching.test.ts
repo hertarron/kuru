@@ -12,6 +12,8 @@ import {
   withActiveChild,
   repairDetachedAssistants,
   planContinuation,
+  planSplice,
+  planUserDeleteWrites,
 } from '../message-branching'
 
 let clock = 1000
@@ -243,6 +245,122 @@ describe('message-branching', () => {
       const partial = msg('a1', 'assistant', 'half', { parentId: 'u1' })
       const plan = planContinuation([u, partial], 'a1', 'a1', null)
       expect(plan).toEqual({ parentId: 'u1', deletePartialId: null })
+    })
+  })
+
+  describe('planSplice', () => {
+    // Apply a splice plan the way the delete handler does.
+    const applySplice = (messages: ThreadMessage[], targetId: string) => {
+      const target = messages.find((m) => m.id === targetId)!
+      const plan = planSplice(messages, target)
+      const byId = new Map(plan.reparented.map((m) => [m.id, m]))
+      return {
+        plan,
+        next: messages
+          .filter((m) => m.id !== targetId)
+          .map((m) => byId.get(m.id) ?? m),
+      }
+    }
+
+    it('is a no-op on legacy un-branched threads', () => {
+      const m = [msg('a', 'user', 'hi'), msg('b', 'assistant', 'yo')]
+      expect(planSplice(m, m[0])).toEqual({
+        reparented: [],
+        promotedChildId: null,
+        wasActiveRootEligible: false,
+      })
+    })
+
+    it('splices a mid-chain node: child joins the grandparent and the path stays continuous', () => {
+      const u1 = msg('u1', 'user', 'q1', { parentId: null })
+      const a1 = msg('a1', 'assistant', 'r1', { parentId: 'u1' })
+      const u2 = msg('u2', 'user', 'q2', { parentId: 'a1' })
+      const a2 = msg('a2', 'assistant', 'r2', { parentId: 'u2' })
+      const { plan, next } = applySplice([u1, a1, u2, a2], 'a1')
+
+      expect(plan.reparented.map((m) => m.id)).toEqual(['u2'])
+      expect(getParentId(next.find((m) => m.id === 'u2')!)).toBe('u1')
+      expect(ids(computeActivePath(next))).toEqual(['u1', 'u2', 'a2'])
+    })
+
+    it('deleting a leaf only removes it; nothing to reparent or promote', () => {
+      const u1 = msg('u1', 'user', 'q1', { parentId: null })
+      const a1 = msg('a1', 'assistant', 'r1', { parentId: 'u1' })
+      const { plan, next } = applySplice([u1, a1], 'a1')
+      expect(plan.reparented).toEqual([])
+      expect(plan.promotedChildId).toBeNull()
+      expect(ids(computeActivePath(next))).toEqual(['u1'])
+    })
+
+    it('deleting an inactive version leaves the active branch untouched', () => {
+      const a = msg('a', 'user', 'q', { parentId: null })
+      const b1 = msg('b1', 'assistant', 'v1', { parentId: 'a' })
+      const c1 = msg('c1', 'user', 'f1', { parentId: 'b1' })
+      const b2 = msg('b2', 'assistant', 'v2', { parentId: 'a' })
+      const c2 = msg('c2', 'user', 'f2', { parentId: 'b2' })
+      // Active path runs through b1 (pinned); b2 is an older inactive version.
+      const pinned = withActiveChild(a, 'b1')
+      const { plan, next } = applySplice([pinned, b1, c1, b2, c2], 'b2')
+
+      // c2 was promoted onto `a` as a sibling of b1's subtree...
+      expect(plan.reparented.map((m) => m.id)).toEqual(['c2'])
+      // ...but the visible conversation still runs through b1 -> c1.
+      expect(ids(computeActivePath(next))).toEqual(['a', 'b1', 'c1'])
+    })
+
+    it('promotes the deleted node\'s preferred child when present, else the newest', () => {
+      const u1 = msg('u1', 'user', 'q1', { parentId: null })
+      const a1 = msg('a1', 'assistant', 'r1', {
+        parentId: 'u1',
+        activeChildId: 'u3',
+      })
+      const u2 = msg('u2', 'user', 'older', { parentId: 'a1' })
+      const u3 = msg('u3', 'user', 'preferred', { parentId: 'a1' })
+      const { plan } = applySplice([u1, a1, u2, u3], 'a1')
+      expect(plan.promotedChildId).toBe('u3')
+
+      const plain = [
+        u1,
+        msg('a1', 'assistant', 'r1', { parentId: 'u1' }),
+        u2,
+        u3,
+      ]
+      expect(applySplice(plain, 'a1').plan.promotedChildId).toBe('u3') // newest
+    })
+
+    it('root deletion turns children into roots', () => {
+      const u1 = msg('u1', 'user', 'q1', { parentId: null })
+      const a1 = msg('a1', 'assistant', 'r1', { parentId: 'u1' })
+      const { plan, next } = applySplice([u1, a1], 'u1')
+      expect(plan.wasActiveRootEligible).toBe(true)
+      expect(getParentId(next[0])).toBeNull()
+      expect(ids(computeActivePath(next))).toEqual(['a1'])
+    })
+  })
+
+
+  describe('planUserDeleteWrites (pair delete)', () => {
+    it('dooms the paired reply and promotes its children to the grandparent', () => {
+      const u1 = msg('u1', 'user', 'q1', { parentId: null })
+      const a1 = msg('a1', 'assistant', 'r1', { parentId: 'u1' })
+      const u2 = msg('u2', 'user', 'q2', { parentId: 'a1' })
+      const a2 = msg('a2', 'assistant', 'r2', { parentId: 'u2' })
+      const u3 = msg('u3', 'user', 'q3', { parentId: 'a2' })
+
+      const plan = planUserDeleteWrites([u1, a1, u2, a2, u3], u2)
+      expect(plan.doomedReplyIds).toEqual(['a2'])
+      expect(plan.reparented.map((m) => m.id)).toEqual(['u3'])
+      expect(getParentId(plan.reparented[0])).toBe('a1')
+      expect(plan.promotedChildId).toBe('u3')
+      expect(plan.wasRootTurn).toBe(false)
+    })
+
+    it('dooms every version of the paired reply', () => {
+      const u1 = msg('u1', 'user', 'q', { parentId: null })
+      const r1 = msg('r1', 'assistant', 'v1', { parentId: 'u1' })
+      const r2 = msg('r2', 'assistant', 'v2', { parentId: 'u1' })
+      const plan = planUserDeleteWrites([u1, r1, r2], u1)
+      expect(plan.doomedReplyIds.sort()).toEqual(['r1', 'r2'])
     })
   })
 })

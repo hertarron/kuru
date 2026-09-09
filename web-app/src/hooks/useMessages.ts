@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ThreadMessage } from '@janhq/core'
 import { getServiceHub } from '@/hooks/useServiceHub'
+import { markMessageDeleted } from '@/lib/message-tombstones'
 
 type MessageState = {
   messages: Record<string, ThreadMessage[]>
@@ -79,6 +80,9 @@ export const useMessages = create<MessageState>()((set, get) => ({
     })
   },
   deleteMessage: (threadId, messageId) => {
+    // Tombstone before anything async so a concurrent thread load can never
+    // merge the doomed row back in.
+    markMessageDeleted(messageId)
     getServiceHub().messages().deleteMessage(threadId, messageId)
     set((state) => ({
       messages: {

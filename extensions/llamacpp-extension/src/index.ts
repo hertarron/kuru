@@ -52,11 +52,16 @@ import {
   detectEmbeddingFromGgufMeta,
   detectMtpLayersFromGgufMeta,
   detectTemplateKwargsFromChatTemplate,
+  resolveImportedModelName,
   getDefaultEmbeddingModelId,
   setDefaultEmbeddingModelId,
   type EmbedBatchResult,
 } from './util'
 import { generatePreset, MTP_MIN_BUILD } from './preset'
+import {
+  parseCalibration,
+  type CalibrationReport,
+} from './calibration'
 import {
   backendImpliesGpu,
   evaluateEmbeddingVector,
@@ -75,11 +80,14 @@ import { basename } from '@tauri-apps/api/path'
 import {
   loadLlamaModel,
   readGgufMetadata,
+  GgufMetadata,
   isModelSupported,
   unloadLlamaModel,
   reloadRouterModels,
   routerHealth,
   adoptRouter,
+  calibrateModel,
+  cancelCalibrateModel,
   LlamacppConfig,
   DownloadItem,
   ModelConfig,
@@ -136,9 +144,6 @@ type BackendSelection = {
 // preset is read; cosmetic / process-only keys (auto_update_engine, models_max,
 // timeout, llamacpp_env, version_backend) are handled separately or not at all.
 const PRESET_AFFECTING_KEYS = new Set<string>([
-  'fit',
-  'fit_target',
-  'fit_ctx',
   'ctx_size',
   'n_gpu_layers',
   'flash_attn',
@@ -204,8 +209,14 @@ const SETUP_CONSENT_KEY = 'llamacpp-first-run-setup-started'
 const FALLBACK_EMBEDDING_MODEL_ID = 'sentence-transformer-mini'
 const FALLBACK_EMBEDDING_MODEL_URL =
   'https://huggingface.co/second-state/All-MiniLM-L6-v2-Embedding-GGUF/resolve/main/all-MiniLM-L6-v2-ggml-model-f16.gguf?download=true'
+// Bumped when a key is added to MODEL_SETTINGS_YAML_MAPPING. The store can
+// already hold a value the mapping did not carry to `model.yml` when it was
+// written, and the sidebar only sends a key whose value changed, so it would
+// never be sent again. v2 adds `split_mode`. v3 adds `flash_attn`. v4
+// reconciles disagreements rather than only filling gaps, and has to re-run
+// everywhere to repair the ones already written.
 const LLAMACPP_MODEL_SETTINGS_BACKFILL_KEY =
-  'llamacpp_model_yaml_backfill_v1'
+  'llamacpp_model_yaml_backfill_v4'
 
 // Short and non-empty: enough to exercise tokenize plus pooling without making
 // setup wait on a long prompt.
@@ -242,6 +253,12 @@ const coerceIntSetting = (v: unknown): YamlSettingValue => {
   const n = typeof v === 'number' ? v : Number(v)
   return Number.isFinite(n) ? Math.floor(n) : null
 }
+/**
+ * f16 is llama.cpp's default and the preset writer omits it, so it maps to
+ * null rather than an explicit line.
+ */
+const coerceCacheType = (v: unknown): YamlSettingValue =>
+  typeof v === 'string' && v.trim().length > 0 && v !== 'f16' ? v.trim() : null
 
 const MODEL_SETTINGS_YAML_MAPPING: Record<
   string,
@@ -318,6 +335,18 @@ const MODEL_SETTINGS_YAML_MAPPING: Record<
     yamlKey: 'no_kv_offload',
     coerce: (v) => (v === true ? true : null),
   },
+  cache_type_k: {
+    yamlKey: 'cache_type_k',
+    coerce: coerceCacheType,
+  },
+  flash_attn: {
+    yamlKey: 'flash_attn',
+    coerce: (v) => (v === 'on' || v === 'off' ? v : null),
+  },
+  cache_type_v: {
+    yamlKey: 'cache_type_v',
+    coerce: coerceCacheType,
+  },
   override_tensor_buffer_t: {
     yamlKey: 'override_tensor',
     coerce: (v) =>
@@ -326,6 +355,21 @@ const MODEL_SETTINGS_YAML_MAPPING: Record<
   offload_mmproj: {
     yamlKey: 'mmproj_offload',
     coerce: (v) => (v === false ? false : null),
+  },
+  device: {
+    yamlKey: 'device',
+    coerce: (v) =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null,
+  },
+  tensor_split: {
+    yamlKey: 'tensor_split',
+    coerce: (v) =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null,
+  },
+  split_mode: {
+    yamlKey: 'split_mode',
+    coerce: (v) =>
+      v === 'none' || v === 'layer' || v === 'row' ? v : null,
   },
 }
 
@@ -505,10 +549,6 @@ export default class llamacpp_extension extends AIEngine {
     }
     this.config = loadedConfig as LlamacppConfig
     this.recomposeVersionBackend()
-
-    // Auto-fit is disabled by default on all platforms; ctx-size owns context
-    // sizing. Force off for users a prior build left with fit enabled.
-    await this.migrateFitOff()
 
     await this.migrateAutoUnloadToModelsMax()
 
@@ -1337,27 +1377,26 @@ export default class llamacpp_extension extends AIEngine {
     logger.info('Cleared stored backend type preference')
   }
 
-  private async migrateFitOff(): Promise<void> {
-    const MIGRATION_KEY = 'llamacpp_fit_off_v1'
-    if (await getBackendSetting(MIGRATION_KEY)) return
-
-    if (this.config.fit === true) {
-      const settings = await this.getSettings()
-      await this.updateSettings(
-        settings.map((item) => {
-          if (item.key === 'fit') {
-            item.controllerProps.value = false
-          }
-          return item
-        })
-      )
-      this.config.fit = false
-      logger.info('Migrated fit setting: disabled')
-    }
-
-    await setBackendSetting(MIGRATION_KEY, '1')
-  }
-
+  /**
+   * Makes `model.yml` agree with the sidebar for every key the sidebar owns.
+   *
+   * Two stores describe one model: the persisted provider settings the UI
+   * renders, and the `model.yml` the router preset is built from. Only a
+   * changed sidebar value is ever written across, so a key the yaml holds and
+   * the store does not is invisible and permanent — the sidebar cannot send
+   * a key whose value did not change, and a checkbox already showing the
+   * right state produces no change at all.
+   *
+   * Found with `no_kv_offload`: the yaml carried `true` while the sidebar
+   * showed the box unticked, so every load ran with `--no-kv-offload` and put
+   * the whole KV cache in system RAM. The context planner budgeted that cache
+   * onto the cards, so both of them sat gigabytes below the plan with no way
+   * to tell why. This used to skip any key the yaml already had, which is
+   * exactly the case that needs correcting, so now the store wins and a value
+   * that coerces to nothing removes the yaml key. Keys with no mapping —
+   * `model_path`, `size_bytes` and the rest of the yaml's own bookkeeping —
+   * are never touched.
+   */
   private async migratePersistedModelSettingsToYaml(): Promise<void> {
     if (await getBackendSetting(LLAMACPP_MODEL_SETTINGS_BACKFILL_KEY)) return
 
@@ -1393,10 +1432,16 @@ export default class llamacpp_extension extends AIEngine {
         const mapping = MODEL_SETTINGS_YAML_MAPPING[sidebarKey]
         if (!mapping) continue
 
-        if (mapping.yamlKey in cfg) continue
-
         const next = mapping.coerce(persistedSetting?.controller_props?.value)
-        if (next === null) continue
+        const current = (cfg as Record<string, unknown>)[mapping.yamlKey]
+        if (next === null) {
+          if (mapping.yamlKey in cfg) {
+            delete (cfg as Record<string, unknown>)[mapping.yamlKey]
+            touched = true
+          }
+          continue
+        }
+        if (current === next) continue
 
         ;(cfg as Record<string, unknown>)[mapping.yamlKey] = next
         touched = true
@@ -3228,7 +3273,7 @@ export default class llamacpp_extension extends AIEngine {
     let isEmbedding = false
     let mtpLayers = 0
     let templateKwargs: TemplateKwarg[] = []
-    let resolvedName: string | undefined
+    let ggufName: unknown
 
     try {
       // Validate main model file
@@ -3245,11 +3290,7 @@ export default class llamacpp_extension extends AIEngine {
         modelMetadata.metadata?.['tokenizer.chat_template']
       )
 
-      const rawName = modelMetadata.metadata?.['general.name']
-      if (typeof rawName === 'string') {
-        const normalized = rawName.trim().replace(/\s+/g, '-')
-        if (normalized.length > 0) resolvedName = normalized
-      }
+      ggufName = modelMetadata.metadata?.['general.name']
 
       // Validate mmproj file if present
       if (mmprojPath) {
@@ -3290,10 +3331,8 @@ export default class llamacpp_extension extends AIEngine {
       ).size
     }
 
-    if (!resolvedName) {
-      const base = opts.modelPath.split(/[\\/]/).pop() ?? modelId
-      resolvedName = base.replace(/\.gguf$/i, '') || modelId
-    }
+    const resolvedName =
+      resolveImportedModelName(opts.modelPath, ggufName) || modelId
 
     // TODO: add updateModelConfig() method
     const modelConfig = {
@@ -3485,6 +3524,30 @@ export default class llamacpp_extension extends AIEngine {
       logger.error('Error in load command:\n', error)
       throw error
     }
+  }
+
+  /**
+   * Runs the eviction `performLoad` would run, early.
+   *
+   * The context planner budgets VRAM from a live reading, and until this
+   * existed that reading was taken while the outgoing model was still
+   * resident: switching models planned the incoming one against a card
+   * holding several gigabytes that were about to be freed, and it loaded
+   * with layers on the CPU that had a card waiting for them. Calling this
+   * first makes the reading describe the machine the model will actually
+   * load into.
+   *
+   * Idempotent — `evictChatIfAtCapacity` reconciles against the router's own
+   * loaded set — so `performLoad` still calls it and nothing is evicted
+   * twice. Returns true when it actually unloaded something, which is the
+   * caller's signal that the VRAM reading needs time to settle.
+   */
+  async evictForLoad(incomingModelId: string): Promise<boolean> {
+    if (!(await this.getRouterInfo())) return false
+    const before = await this.getLoadedModels().catch(() => [] as string[])
+    await this.evictChatIfAtCapacity(incomingModelId)
+    const after = await this.getLoadedModels().catch(() => before)
+    return after.length < before.length
   }
 
   /**
@@ -3885,6 +3948,101 @@ export default class llamacpp_extension extends AIEngine {
     }
   }
 
+  /**
+   * File sizes the context planner budgets beside the GGUF shape: the vision
+   * projector (`mmproj`) and the MTP draft model. model.yml folds every file
+   * into `size_bytes`, but the header the planner reads covers the main file
+   * only, so the parts are read back out here. The draft header comes along
+   * too, so the planner can size the second context llama-server allocates
+   * with the same math it uses for the main one.
+   */
+  async getModelExtraSizes(modelId: string): Promise<{
+    mmprojBytes: number
+    mtp: boolean
+    mtpModelPath?: string
+    mtpDraftBytes: number
+    mtpDraftHeader?: GgufMetadata
+  }> {
+    const fallback = { mmprojBytes: 0, mtp: false, mtpDraftBytes: 0 }
+    try {
+      const path = await joinPath([
+        await this.getProviderPath(),
+        'models',
+        modelId,
+        'model.yml',
+      ])
+      if (!(await fs.existsSync(path))) return fallback
+      const cfg = (await invoke<ModelConfig>('read_yaml', { path })) as ModelConfig & {
+        mmproj_size_bytes?: number
+        model_size_bytes?: number
+        size_bytes?: number
+        mtp_model_path?: string
+      }
+      const janDataFolderPath = await getJanDataFolderPath()
+      const absPath = async (rel: string | undefined): Promise<string | undefined> => {
+        if (!rel) return undefined
+        try {
+          const abs = await joinPath([janDataFolderPath, rel])
+          return (await fs.existsSync(abs)) ? abs : undefined
+        } catch {
+          return undefined
+        }
+      }
+      const statSize = async (abs: string | undefined): Promise<number> => {
+        if (!abs) return 0
+        try {
+          const stat = await fs.fileStat(abs)
+          return typeof stat?.size === 'number' && stat.size > 0 ? stat.size : 0
+        } catch {
+          return 0
+        }
+      }
+      // Prefer the recorded sizes; stat the files when the record is missing.
+      const mmprojAbs = await absPath(cfg.mmproj_path)
+      let mmprojBytes =
+        typeof cfg.mmproj_size_bytes === 'number' && cfg.mmproj_size_bytes > 0
+          ? cfg.mmproj_size_bytes
+          : 0
+      if (mmprojBytes <= 0) {
+        mmprojBytes = await statSize(mmprojAbs)
+      }
+      const mtpModelPath =
+        typeof cfg.mtp_model_path === 'string' && cfg.mtp_model_path.length > 0
+          ? cfg.mtp_model_path
+          : undefined
+      const mtpDraftAbs = await absPath(mtpModelPath)
+      let mtpDraftBytes = await statSize(mtpDraftAbs)
+      if (
+        mtpDraftBytes <= 0 &&
+        mtpModelPath &&
+        typeof cfg.size_bytes === 'number' &&
+        typeof cfg.model_size_bytes === 'number'
+      ) {
+        mtpDraftBytes = Math.max(
+          0,
+          cfg.size_bytes - cfg.model_size_bytes - mmprojBytes
+        )
+      }
+      // Header-only read, like the planner's own main-file read. Only with
+      // MTP on: the planner charges the draft's cache nowhere else, so
+      // reading it while the toggle is off is a file read for nothing.
+      const mtpDraftHeader =
+        mtpDraftAbs && cfg.mtp === true
+          ? await readGgufMetadata(mtpDraftAbs).catch(() => undefined)
+          : undefined
+      return {
+        mmprojBytes,
+        mtp: cfg.mtp === true,
+        mtpModelPath,
+        mtpDraftBytes,
+        mtpDraftHeader,
+      }
+    } catch (e) {
+      logger.warn(`Error reading model sizes for ${modelId}`, e)
+      return fallback
+    }
+  }
+
   async updateMtpSettings(
     modelId: string,
     patch: {
@@ -4240,6 +4398,116 @@ export default class llamacpp_extension extends AIEngine {
    * @returns
    */
   async isToolSupported(modelId: string): Promise<boolean> {
+    const metadata = await this.readModelGguf(modelId)
+    return metadata.metadata?.['tokenizer.chat_template']?.includes('tools')
+  }
+
+  /**
+   * Load one model once, with its own settings, and report what llama.cpp
+   * allocated on each device.
+   *
+   * The context planner derives the weights and the KV cache from GGUF
+   * metadata exactly. The compute buffer it cannot: llama.cpp's graph builder
+   * decides that, and three models measured at the same context and
+   * micro-batch came out at 441, 92 and 156 MiB with nothing in the header
+   * ordering them. So until a model is measured the planner reserves the
+   * largest figure ever seen, which costs context on every model that needs
+   * less.
+   *
+   * The probe is a separate short-lived llama-server rather than the app's own
+   * router: the numbers print only at verbosity 5, which would fill the router
+   * log with a line per request. The model is unloaded first so the probe is
+   * not measuring a card that already holds a copy of it.
+   */
+  async calibrate(modelId: string): Promise<CalibrationReport> {
+    const versionBackend = this.config?.version_backend
+    if (!isBackendConfigured(versionBackend)) {
+      throw new Error('No backend is configured, so nothing can be measured.')
+    }
+    const [version, backend] = (versionBackend as string).split('/')
+
+    if (await this.findSessionByModel(modelId)) {
+      await this.unload(modelId).catch(() => undefined)
+    }
+
+    const providerPath = await this.getProviderPath()
+    const janDataFolderPath = await getJanDataFolderPath()
+    const build = parseBuildNumber(version)
+    const { path: presetPath } = await generatePreset(
+      providerPath,
+      janDataFolderPath,
+      this.config,
+      {
+        supportsMtp: build !== null && build >= MTP_MIN_BUILD,
+        reservedBackgroundSlots: (await readAutoGenerateTitleSetting()) ? 1 : 0,
+        only: { modelId, fileName: 'calibrate.preset.ini' },
+      }
+    )
+
+    const backendExe = await getBackendExePath(backend, version)
+    const logPath = await joinPath([
+      janDataFolderPath,
+      'logs',
+      'calibrate.log',
+    ])
+    const port = await this.getRandomPort()
+
+    const envs: Record<string, string> = {}
+    if (this.llamacpp_env) this.parseEnvFromString(envs, this.llamacpp_env)
+
+    const lines = await calibrateModel(
+      backendExe,
+      presetPath,
+      logPath,
+      port,
+      envs
+    )
+    // The figures scale with these, so they are stored with them. Resolved the
+    // same way the preset resolves them: per-model value, then the global one,
+    // then llama.cpp's own default.
+    const modelConfigPath = await joinPath([
+      providerPath,
+      'models',
+      modelId,
+      'model.yml',
+    ])
+    const mc = await invoke<ModelConfig & {
+      ctx_size?: number
+      ubatch_size?: number
+    }>('read_yaml', { path: modelConfigPath })
+    const resolve = (perModel: unknown, global: unknown, fallback: number) =>
+      typeof perModel === 'number' && perModel > 0
+        ? perModel
+        : typeof global === 'number' && global > 0
+          ? global
+          : fallback
+    const report = parseCalibration(lines, {
+      ubatch: resolve(mc?.ubatch_size, this.config?.ubatch_size, 512),
+      context: resolve(mc?.ctx_size, this.config?.ctx_size, 8192),
+      backend: versionBackend as string,
+    })
+    logger.info(
+      `Calibrated ${modelId}: ${JSON.stringify(report)}`
+    )
+    return report
+  }
+
+  /**
+   * Stops a running fit-test probe, if any. A stuck probe outlives the UI
+   * that started it, so this kills the process backend-side; the in-flight
+   * `calibrate()` await then rejects with the cancellation error and its
+   * caller drops the run. True when a probe was actually running.
+   */
+  async cancelCalibrate(): Promise<boolean> {
+    return cancelCalibrateModel()
+  }
+
+  /**
+   * GGUF header of an installed model, metadata and tensor table. The context
+   * planner sizes layers and KV cache from it, so it must not be reduced to
+   * the few keys any one caller happens to need.
+   */
+  async readModelGguf(modelId: string): Promise<GgufMetadata> {
     const janDataFolderPath = await getJanDataFolderPath()
     const modelConfigPath = await joinPath([
       this.providerPath,
@@ -4250,15 +4518,12 @@ export default class llamacpp_extension extends AIEngine {
     const modelConfig = await invoke<ModelConfig>('read_yaml', {
       path: modelConfigPath,
     })
-    // model option is required
-    // NOTE: model_path and mmproj_path can be either relative to Jan's data folder or absolute path
+    // NOTE: model_path can be relative to Jan's data folder or absolute
     const modelPath = await joinPath([
       janDataFolderPath,
       modelConfig.model_path,
     ])
-    return (await readGgufMetadata(modelPath)).metadata?.[
-      'tokenizer.chat_template'
-    ]?.includes('tools')
+    return readGgufMetadata(modelPath)
   }
 
   /**

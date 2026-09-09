@@ -7,6 +7,9 @@ import {
 } from '@/components/ui/popover'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { cn, getProviderTitle, getModelDisplayName } from '@/lib/utils'
+import { PILL_CHEVRON } from '@/constants/layout'
+import { usePillLabel } from '@/hooks/usePillLabel'
+import { labelForms } from '@/lib/pill-labels'
 import { highlightFzfMatch } from '@/utils/highlight'
 import Capabilities from './Capabilities'
 import { IconSettings, IconX } from '@tabler/icons-react'
@@ -30,6 +33,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 type DropdownModelProviderProps = {
   model?: ThreadModel
   useLastUsedModel?: boolean
+  /** Toolbar-sized pill for the chatbox row rather than the header. */
+  compact?: boolean
 }
 
 interface SearchableModel {
@@ -55,6 +60,7 @@ const setLastUsedModel = (provider: string, model: string) => {
 const DropdownModelProvider = memo(function DropdownModelProvider({
   model,
   useLastUsedModel = false,
+  compact = false,
 }: DropdownModelProviderProps) {
   const {
     providers,
@@ -457,6 +463,14 @@ const DropdownModelProvider = memo(function DropdownModelProvider({
     ]
   )
 
+  // The row decides how much of the model id fits; see PillRow.
+  const forms = useMemo(() => labelForms(displayModel), [displayModel])
+  const {
+    label: fittedModel,
+    pillRef: measurePill,
+    labelRef,
+  } = usePillLabel('model', forms)
+
   const currentModel = selectedModel?.id
     ? getModelBy(selectedModel?.id)
     : undefined
@@ -469,7 +483,12 @@ const DropdownModelProvider = memo(function DropdownModelProvider({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
         <PopoverTrigger asChild>
-          <div className="border relative z-20 px-4 py-1.5 flex items-center gap-1.5 rounded-full">
+          <div ref={measurePill} className={cn(
+              // Header pills stand alone; the compact form has to sit in the
+              // chatbox toolbar row at the same 28px height as its buttons.
+              'border relative z-20 flex items-center gap-1.5 rounded-full min-w-0',
+              compact ? 'pl-2.5 pr-1 h-7 text-xs' : 'pl-4 pr-2 h-10'
+            )}>
             <button
               type="button"
               className="font-medium cursor-pointer flex items-center gap-1.5 relative z-20 min-w-0"
@@ -479,20 +498,23 @@ const DropdownModelProvider = memo(function DropdownModelProvider({
                   <ProvidersAvatar provider={provider} />
                 </div>
               )}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span
-                    className={cn(
-                      'text-foreground truncate leading-normal',
-                      !selectedModel?.id && 'text-muted-foreground'
-                    )}
-                  >
-                    {displayModel}
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>{displayModel}</TooltipContent>
-              </Tooltip>
-              <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+              {(!compact || fittedModel) && (
+                <span
+                  ref={labelRef}
+                  className={cn(
+                    'text-foreground truncate leading-normal',
+                    !selectedModel?.id && 'text-muted-foreground'
+                  )}
+                >
+                  {compact ? fittedModel : displayModel}
+                </span>
+              )}
+              <ChevronsUpDown
+                className={cn(
+                  'size-4 shrink-0 text-muted-foreground',
+                  compact && PILL_CHEVRON
+                )}
+              />
             </button>
           {currentModel?.settings &&
             provider &&
@@ -522,7 +544,9 @@ const DropdownModelProvider = memo(function DropdownModelProvider({
         align="start"
         // sideOffset={16}
         // alignOffset={-10}
-        side="bottom"
+        // In the chatbox the pill sits at the bottom of the window, so the
+        // list has to grow upward.
+        side={compact ? 'top' : 'bottom'}
         avoidCollisions={searchValue.length === 0 ? true : false}
       >
         <div className="flex flex-col size-full">

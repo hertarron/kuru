@@ -2,6 +2,9 @@ import TextareaAutosize from 'react-textarea-autosize'
 import { cn, formatBytes } from '@/lib/utils'
 import { usePrompt } from '@/hooks/usePrompt'
 import { useThreads } from '@/hooks/useThreads'
+import { usePendingLorebooks } from '@/stores/pending-lorebooks'
+import { usePendingPersona } from '@/stores/pending-persona'
+import { usePendingMemory } from '@/stores/pending-memory'
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -37,6 +40,12 @@ import {
 import { generateId } from 'ai'
 import { useMessageQueue } from '@/stores/message-queue-store'
 import { QueuedMessageChip } from '@/containers/QueuedMessageBubble'
+import DropdownModelProvider from '@/containers/DropdownModelProvider'
+import { CharacterPill } from '@/containers/CharacterPill'
+import { LorebookPill } from '@/containers/LorebookPill'
+import { MemoryStrip } from '@/containers/MemoryStrip'
+import { PersonaPill } from '@/containers/PersonaPill'
+import { PillRow } from '@/containers/PillRow'
 import { SamplerPopover } from '@/containers/SamplerPopover'
 import { BotIcon } from 'lucide-react'
 import { useTranslation } from '@/i18n/react-i18next-compat'
@@ -64,8 +73,12 @@ import {
   SESSION_STORAGE_PREFIX,
 } from '@/constants/chat'
 import { defaultModel } from '@/lib/models'
-import { useAssistant } from '@/hooks/useAssistant'
-import { AssistantSwitcher } from '@/containers/AssistantSwitcher'
+import {
+  useCharacters,
+  resolveThreadCharacter,
+  defaultCharacter,
+} from '@/hooks/useCharacters'
+import { isRoleplayCharacter } from '@/lib/character-card'
 import DropdownToolsAvailable from '@/containers/DropdownToolsAvailable'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import { useTools } from '@/hooks/useTools'
@@ -75,15 +88,20 @@ import { useShallow } from 'zustand/react/shallow'
 import { McpExtensionToolLoader } from './McpExtensionToolLoader'
 import {
   ExtensionTypeEnum,
+  MessageStatus,
+  ChatCompletionRole,
+  ContentType,
   MCPExtension,
   fs,
   VectorDBExtension,
 } from '@janhq/core'
+import type { ThreadMessage } from '@janhq/core'
 import { ExtensionManager } from '@/lib/extension'
 import { useAttachments } from '@/hooks/useAttachments'
 import { toast } from 'sonner'
 import { isPlatformTauri } from '@/lib/platform/utils'
 import { shouldShowTokenCounter } from '@/lib/tokenCounterVisibility'
+import { ContextSnapshotSheet } from '@/containers/ContextSnapshotSheet'
 import { useAttachmentIngestionPrompt } from '@/hooks/useAttachmentIngestionPrompt'
 import {
   NEW_THREAD_ATTACHMENT_KEY,
@@ -107,6 +125,8 @@ type ChatInputProps = {
   showSpeedToken?: boolean
   model?: ThreadModel
   initialMessage?: boolean
+  /** Which greeting variant the home screen preview has selected (0 = first_mes). */
+  initialGreetingIndex?: number
   projectId?: string
   projectAssistantId?: string
   onSubmit?: (
@@ -137,7 +157,9 @@ const videoMimeForExt = (ext: string | undefined): string => {
 
 const ChatInput = memo(function ChatInput({
   className,
+  model,
   initialMessage,
+  initialGreetingIndex,
   projectId,
   projectAssistantId,
   onSubmit,
@@ -157,8 +179,8 @@ const ChatInput = memo(function ChatInput({
   const navigateHistory = usePrompt((state) => state.navigateHistory)
   const currentThreadId = useThreads((state) => state.currentThreadId)
   const currentThread = useThreads((state) => state.getCurrentThread())
-  const updateCurrentThreadAssistant = useThreads(
-    (state) => state.updateCurrentThreadAssistant
+  const updateCurrentThreadCharacter = useThreads(
+    (state) => state.updateCurrentThreadCharacter
   )
   const { t } = useTranslation()
   const spellCheckChatInput = useGeneralSetting(
@@ -170,12 +192,12 @@ const ChatInput = memo(function ChatInput({
   useTools()
   const router = useRouter()
   const createThread = useThreads((state) => state.createThread)
-  const { 
+  const {
     loading,
-    currentAssistant,
-    setCurrentAssistant,
-    assistants
-  } = useAssistant()
+    currentCharacter,
+    setCurrentCharacter,
+    characters
+  } = useCharacters()
 
   // Agent mode
   // Use TEMPORARY_CHAT_ID as fallback key on the home screen (same pattern as attachments)
@@ -225,21 +247,35 @@ const ChatInput = memo(function ChatInput({
   // Reconcile video capability from /props once the model is loaded.
   useReconcileVideoCapability(selectedModel?.id, selectedProvider, isModelActive)
 
+  const [contextSheetOpen, setContextSheetOpen] = useState(false)
+  const openContextSheet = useCallback(() => setContextSheetOpen(true), [])
+
   const tokenCounterVisible = shouldShowTokenCounter({
     hasSelectedModel: !!selectedModel,
     isAgentMode: effectiveAgentMode,
-    isInitialMessage: !!initialMessage,
-    hasMessages: (threadMessages?.length ?? 0) > 0,
-    hasPromptText: prompt.trim().length > 0,
   })
-  const [selectedAssistantId, setSelectedAssistantId] = useState<
+  const [selectedCharacterId, setSelectedCharacterId] = useState<
     string | undefined
-  >(loading ? undefined : projectAssistantId || currentAssistant?.id || '')
+  >(loading ? undefined : projectAssistantId || currentCharacter?.id || '')
 
   useEffect(() => {
-    setSelectedAssistantId(projectAssistantId || currentAssistant?.id || '')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, projectAssistantId])
+    // Track the store's live pick too, so anything still reading this state
+    // (the sampler popover's header) agrees with what a new chat will use.
+    setSelectedCharacterId(projectAssistantId || currentCharacter?.id || '')
+  }, [loading, projectAssistantId, currentCharacter?.id])
+
+  // In a thread the character is whatever that thread was started with; on the
+  // home screen it is the store selection. Deliberately NOT selectedCharacterId
+  // -- that only re-syncs on load/project change, so the pill would swap while
+  // the gate below stayed on the previous character until a reload. Mirrors
+  // CharacterPill's own `currentCharacter ?? defaultCharacter`.
+  const chatboxCharacter = currentThread
+    ? resolveThreadCharacter(currentThread, characters)
+    : (currentCharacter ??
+      (!loading ? defaultCharacter : undefined))
+  const roleplayChatbox = isRoleplayCharacter(chatboxCharacter)
+  // Memory folds per thread, so the strip waits for one to exist.
+  const showMemoryStrip = roleplayChatbox && !!currentThread
 
   // Jan Browser Extension hook
   const {
@@ -474,13 +510,15 @@ const ChatInput = memo(function ChatInput({
           }
         }
 
-        // Only use assistant when chatting via project with an assigned assistant
-        // When no projectId, use the selected assistant from dropdown (if any)
+        // Only use assistant when chatting via project with an assigned assistant.
+        // Otherwise the new chat starts with the pill's live pick -- the
+        // characters store's currentCharacter -- NOT selectedCharacterId,
+        // which lags behind it (it only synced on load/project change).
         const assistant = projectAssistantId
-          ? assistants.find((a) => a.id === projectAssistantId)
-          : assistants.find((a) => a.id === selectedAssistantId)
+          ? characters.find((c) => c.id === projectAssistantId)
+          : currentCharacter
 
-        setCurrentAssistant(assistant)
+        setCurrentCharacter(assistant)
 
         const newThread = await createThread(
           {
@@ -491,6 +529,131 @@ const ChatInput = memo(function ChatInput({
           assistant,
           projectMetadata
         )
+
+        // Carry the home screen's world-info picks onto the real thread.
+        const pendingLorebooks = usePendingLorebooks.getState().pending
+        if (
+          pendingLorebooks.extraIds?.length ||
+          pendingLorebooks.disabledIds?.length ||
+          pendingLorebooks.off
+        ) {
+          const created = useThreads.getState().threads[newThread.id]
+          useThreads.getState().updateThread(newThread.id, {
+            metadata: {
+              ...((created?.metadata as Record<string, unknown> | undefined) ??
+                {}),
+              lorebooks: pendingLorebooks,
+            },
+          })
+        }
+        usePendingLorebooks.getState().clear()
+
+        // Same for a persona pinned on the home screen. `personaId: null`
+        // ("no persona here") is a real pick, so test for the key rather than
+        // its truthiness.
+        const pendingPersona = usePendingPersona.getState().pending
+        if (pendingPersona.personaId !== undefined) {
+          const created = useThreads.getState().threads[newThread.id]
+          useThreads.getState().updateThread(newThread.id, {
+            metadata: {
+              ...((created?.metadata as Record<string, unknown> | undefined) ??
+                {}),
+              persona: pendingPersona,
+            },
+          })
+        }
+        usePendingPersona.getState().clear()
+
+        // Same for memory auto/sizes picked in the context view on the home
+        // screen. Either key counts as a pick; an empty staging means the
+        // new chat simply inherits the global default and Medium sizes.
+        const pendingMemory = usePendingMemory.getState().pending
+        if (
+          pendingMemory.auto !== undefined ||
+          pendingMemory.sizes !== undefined
+        ) {
+          const created = useThreads.getState().threads[newThread.id]
+          const createdMemory = (
+            (created?.metadata as Record<string, unknown> | undefined)
+              ?.memory ?? {}
+          ) as Record<string, unknown>
+          useThreads.getState().updateThread(newThread.id, {
+            metadata: {
+              ...((created?.metadata as Record<string, unknown> | undefined) ??
+                {}),
+              memory: { ...createdMemory, ...pendingMemory },
+            },
+          })
+        }
+        usePendingMemory.getState().clear()
+
+        // Seed the character's greeting(s) before the user's first message:
+        // first_mes becomes the opening message, alternate greetings become
+        // sibling versions of it (swipeable via version navigation).
+        const characterWithGreeting = assistant as Character | undefined
+        if (
+          isRoleplayCharacter(characterWithGreeting) &&
+          characterWithGreeting?.first_mes?.trim()
+        ) {
+          const addMessage = useMessages.getState().addMessage
+          const baseTime = Date.now()
+          const greetingText = characterWithGreeting.first_mes.trim()
+          const greetingId = generateId()
+          const greetingIds: string[] = [greetingId]
+          const greetingMessage: ThreadMessage = {
+            id: greetingId,
+            object: 'thread.message',
+            thread_id: newThread.id,
+            type: 'text',
+            role: ChatCompletionRole.Assistant,
+            status: MessageStatus.Ready,
+            created_at: baseTime,
+            completed_at: baseTime,
+            content: [
+              { type: ContentType.Text, text: { value: greetingText, annotations: [] } },
+            ],
+            metadata: { parentId: null },
+          }
+          addMessage(greetingMessage)
+          // Alternate greetings are childless siblings of the active one;
+          // the parent pins the greeting as the visible version.
+          for (let i = 0; i < (characterWithGreeting.alternate_greetings?.length ?? 0); i++) {
+            const alt = characterWithGreeting.alternate_greetings![i].trim()
+            if (!alt) continue
+            const altId = generateId()
+            greetingIds.push(altId)
+            addMessage({
+              id: altId,
+              object: 'thread.message',
+              thread_id: newThread.id,
+              type: 'text',
+              role: ChatCompletionRole.Assistant,
+              status: MessageStatus.Ready,
+              created_at: baseTime + i + 1,
+              completed_at: baseTime + i + 1,
+              content: [
+                { type: ContentType.Text, text: { value: alt, annotations: [] } },
+              ],
+              metadata: { parentId: null },
+            })
+          }
+          if (greetingIds.length > 1) {
+            // Greetings are root-level siblings; the thread's activeRootId
+            // pins which greeting variant is visible — honoring the variant
+            // the user preview-selected on the home screen.
+            const chosenIndex = Math.min(
+              Math.max(initialGreetingIndex ?? 0, 0),
+              greetingIds.length - 1
+            )
+            const t = useThreads.getState().threads[newThread.id]
+            useThreads.getState().updateThread(newThread.id, {
+              metadata: {
+                ...((t?.metadata as Record<string, unknown> | undefined) ?? {}),
+                activeRootId: greetingIds[chosenIndex],
+              },
+            })
+          }
+        }
 
         // Transfer agent mode from home screen to the new thread
         if (isAgentMode) {
@@ -1749,7 +1912,12 @@ const ChatInput = memo(function ChatInput({
 
           <div
             className={cn(
-              'relative z-20 px-0 pb-10 border rounded-3xl border-input bg-white dark:bg-input/30',
+              // @container lets the toolbar pills reflow against the chatbox's
+              // real width rather than the window's.
+              // The bottom bar is absolute, so the box reserves its height
+              // here; the memory strip adds a line to it.
+              'relative z-20 px-0 border rounded-3xl border-input bg-white dark:bg-input/30 @container',
+              showMemoryStrip ? 'pb-18' : 'pb-13',
               isFocused && 'ring-1 ring-ring/50',
               isDragOver && 'ring-2 ring-ring/50 border-primary'
             )}
@@ -1947,7 +2115,7 @@ const ChatInput = memo(function ChatInput({
               data-gramm_editor={spellCheckChatInput}
               data-gramm_grammarly={spellCheckChatInput}
               className={cn(
-                'bg-transparent pt-4 w-full shrink-0 border-none resize-none outline-0 px-4',
+                'bg-transparent pt-3 w-full shrink-0 border-none resize-none outline-0 px-4',
                 rows < maxRows && 'scrollbar-hide',
                 className
               )}
@@ -1955,12 +2123,21 @@ const ChatInput = memo(function ChatInput({
           </div>
         </div>
 
-        <div className="absolute z-20 bg-transparent bottom-0 w-full p-2 ">
+        <div className="absolute z-20 bg-transparent bottom-0 w-full px-2 pb-3">
+          {/* Above the send row, never inside it: the strip spans the box, so
+              as a third flex child it stole width from the pills. */}
+          {showMemoryStrip && (
+            <MemoryStrip
+              thread={currentThread}
+              messages={threadMessages || []}
+              onOpen={openContextSheet}
+            />
+          )}
           <div className="flex justify-between items-center w-full">
             <div className="px-1 flex items-center gap-1 flex-1 min-w-0">
               <div
                 className={cn(
-                  'px-1 flex items-center w-full gap-1',
+                  'px-1 flex items-center gap-1 shrink-0',
                   isStreaming && 'opacity-50 pointer-events-none'
                 )}
               >
@@ -1968,7 +2145,7 @@ const ChatInput = memo(function ChatInput({
                 {!effectiveAgentMode && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="secondary" size="icon-sm" className='rounded-full mr-2 mb-1'>
+                    <Button variant="secondary" size="icon-sm" className='rounded-full mr-2'>
                       <PlusIcon size={18} className="text-muted-foreground" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -2039,30 +2216,15 @@ const ChatInput = memo(function ChatInput({
                     </DropdownMenuContent>
                   </DropdownMenu>
                 )}
-                {/* {model?.provider === 'llamacpp' && loadingModel ? (
-                  <ModelLoader />
-                ) : (
-                  <DropdownModelProvider
-                    model={model}
-                    useLastUsedModel={initialMessage}
-                  />
-                )} */}
-                <AssistantSwitcher
-                  assistants={assistants}
-                  currentThread={currentThread}
-                  selectedAssistantId={selectedAssistantId}
-                  setSelectedAssistantId={setSelectedAssistantId}
-                  updateCurrentThreadAssistant={updateCurrentThreadAssistant}
-                />
                 <SamplerPopover
                   providerId={selectedProvider}
                   modelId={selectedModel?.id}
-                  assistantSwitcher={{
-                    assistants,
+                  characterSwitcher={{
+                    characters,
                     currentThread,
-                    selectedAssistantId,
-                    setSelectedAssistantId,
-                    updateCurrentThreadAssistant,
+                    selectedCharacterId,
+                    setSelectedCharacterId,
+                    updateCurrentThreadCharacter,
                   }}
                 />
                 {!effectiveAgentMode && hasJanBrowserMCPConfig && modelSupportsBrowser && (
@@ -2563,12 +2725,35 @@ const ChatInput = memo(function ChatInput({
                     )
                   })()}
               </div>
+              {/* Model, character and world info: the three things that decide
+                  what the next turn sees, next to the controls that shape it.
+                  Outside the group above so they stay usable mid-stream. */}
+              <PillRow>
+                <DropdownModelProvider
+                  model={model}
+                  useLastUsedModel={initialMessage}
+                  compact
+                />
+                <CharacterPill thread={currentThread} compact />
+                {/* A coding assistant has no world info and no persona, so
+                    the controls for them go rather than sit there inert. */}
+                {roleplayChatbox && (
+                  <>
+                    <PersonaPill thread={currentThread} compact />
+                    <LorebookPill thread={currentThread} compact />
+                  </>
+                )}
+              </PillRow>
             </div>
 
             <div className="flex items-center gap-2">
               {tokenCounterVisible && tokenCounterCompact && (
                 <div className="flex-1 flex justify-center">
-                  <TokenCounter messages={threadMessages || []} compact={true} />
+                  <TokenCounter
+                    messages={threadMessages || []}
+                    compact={true}
+                    onClick={openContextSheet}
+                  />
                 </div>
               )}
 
@@ -2578,7 +2763,7 @@ const ChatInput = memo(function ChatInput({
                     <Button
                       variant="destructive"
                       size="icon-sm"
-                      className="rounded-full mr-1 mb-1"
+                      className="rounded-full"
                       onClick={() => {
                         if (!currentThreadId) return
                         const queue = useMessageQueue.getState().getQueue(currentThreadId)
@@ -2603,7 +2788,7 @@ const ChatInput = memo(function ChatInput({
                   disabled={(!prompt.trim() && !hasSendableMedia) || ingestingAny}
                   data-test-id="send-message-button"
                   onClick={() => handleSendMessage(prompt)}
-                  className="rounded-full mr-1 mb-1"
+                  className="rounded-full"
                 >
                   <ArrowRight className="text-primary-fg" />
                 </Button>
@@ -2633,9 +2818,21 @@ const ChatInput = memo(function ChatInput({
 
       {tokenCounterVisible && !tokenCounterCompact && (
         <div className="flex-1 w-full flex justify-start px-2">
-          <TokenCounter messages={threadMessages || []} />
+          <TokenCounter
+            messages={threadMessages || []}
+            onClick={openContextSheet}
+          />
         </div>
       )}
+
+      <ContextSnapshotSheet
+        threadId={currentThreadId}
+        messages={threadMessages || []}
+        streaming={isStreaming}
+        roleplay={roleplayChatbox}
+        open={contextSheetOpen}
+        onOpenChange={setContextSheetOpen}
+      />
 
       <JanBrowserExtensionDialog
         open={extensionDialogOpen}
@@ -2648,3 +2845,7 @@ const ChatInput = memo(function ChatInput({
 })
 
 export default ChatInput
+
+
+
+

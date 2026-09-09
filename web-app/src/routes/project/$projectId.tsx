@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 
 import { useThreadManagement } from '@/hooks/useThreadManagement'
 import { useThreads } from '@/hooks/useThreads'
-import { useAssistant } from '@/hooks/useAssistant'
+import { useCharacters } from '@/hooks/useCharacters'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 
 import ChatInput from '@/containers/ChatInput'
@@ -37,7 +37,7 @@ function ProjectPageContent() {
   const { getFolderById, updateFolder } = useThreadManagement()
   const threads = useThreads((state) => state.threads)
   const deleteAllThreadsByProject = useThreads((state) => state.deleteAllThreadsByProject)
-  const { assistants } = useAssistant()
+  const { characters } = useCharacters()
 
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -46,11 +46,11 @@ function ProjectPageContent() {
   // Find the project
   const project = getFolderById(projectId)
 
-  // Find the assigned assistant
-  const projectAssistant = useMemo(() => {
+  // Find the assigned character
+  const projectCharacter = useMemo(() => {
     if (!project?.assistantId) return null
-    return assistants.find((a) => a.id === project.assistantId) || null
-  }, [project?.assistantId, assistants])
+    return characters.find((c) => c.id === project.assistantId) || null
+  }, [project?.assistantId, characters])
 
   // Get threads for this project
   const projectThreads = useMemo(() => {
@@ -86,8 +86,8 @@ function ProjectPageContent() {
   }
 
   return (
-    <div className="flex flex-col h-svh w-full">
-      <HeaderPage>
+    <div className="flex flex-col h-full w-full">
+      <HeaderPage className="h-auto pt-0">
         <div className="flex items-center justify-between w-full">
           <DropdownModelProvider />
         </div>
@@ -182,24 +182,24 @@ function ProjectPageContent() {
 
           {/* Project Settings Card */}
           <div className="rounded-xl border border-border overflow-hidden mb-6 bg-card">
-            {/* Assistant Section */}
+            {/* Character Section */}
             <div className="flex items-center justify-between p-4 border-b border-border">
               <div className="flex flex-col gap-1">
-                <h3 className="text-sm font-medium">{t('projects.addProjectDialog.assistant')}</h3>
-                {projectAssistant ? (
+                <h3 className="text-sm font-medium">{t('characters:character')}</h3>
+                {projectCharacter ? (
                   <div className="flex items-center gap-1.5 mt-1">
-                    {projectAssistant.avatar && (
+                    {projectCharacter.avatar && (
                       <AvatarEmoji
-                        avatar={projectAssistant.avatar}
+                        avatar={projectCharacter.avatar}
                         imageClassName="w-4 h-4 object-contain"
                         textClassName="text-sm"
                       />
                     )}
-                    <span className="text-sm text-muted-foreground">{projectAssistant.name}</span>
+                    <span className="text-sm text-muted-foreground">{projectCharacter.name}</span>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
-                    {t('projects.noAssistantAssigned')}
+                    {t('characters:noCharacterAssigned')}
                   </p>
                 )}
               </div>
@@ -236,3 +236,5 @@ function ProjectPageContent() {
     </div>
   )
 }
+
+

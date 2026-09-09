@@ -199,7 +199,7 @@ function HubModelDetailContent() {
 
   if (!modelData) {
     return (
-      <div className="flex flex-col h-svh w-full">
+      <div className="flex flex-col h-full w-full">
         <HeaderPage>
           <Button
           onClick={() => navigate({ to: route.hub.index })}
@@ -219,7 +219,7 @@ function HubModelDetailContent() {
   }
 
   return (
-    <div className="flex flex-col h-svh w-full">
+    <div className="flex flex-col h-full w-full">
       <HeaderPage>
         <div className="flex items-center gap-2 w-full">
           <Button

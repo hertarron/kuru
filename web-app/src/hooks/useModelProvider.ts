@@ -756,9 +756,54 @@ export const useModelProvider = create<ModelProviderState>()(
           })
         }
 
+        if (version <= 17 && state?.providers) {
+          // Titles are copied into each model at creation, so a renamed
+          // predefined setting only reaches existing models here.
+          state.providers.forEach((provider) => {
+            if (provider.provider !== 'llamacpp' || !provider.models) return
+            provider.models.forEach((model) => {
+              const settings = model.settings as
+                | Record<string, { title?: string }>
+                | undefined
+              if (!settings) return
+              if (settings.no_kv_offload) {
+                settings.no_kv_offload.title = modelSettings.no_kv_offload.title
+              }
+            })
+          })
+        }
+
+        if (version <= 18 && state?.providers) {
+          // The context planner now owns `ctx_len` unless the user has pinned
+          // one, and `ctx_auto` records which. Nothing before this could tell
+          // the two apart: v16 seeded 8192 into every model, so a stored 8192
+          // is the seed and anything else was typed. Pin the typed ones and
+          // leave the rest for the planner to fill.
+          state.providers.forEach((provider) => {
+            if (provider.provider !== 'llamacpp' || !provider.models) return
+            provider.models.forEach((model) => {
+              const settings = model.settings as
+                | Record<string, unknown>
+                | undefined
+              if (!settings) return
+              const ctx = settings.ctx_len as
+                | { controller_props?: { value?: unknown } }
+                | undefined
+              const value = Number(ctx?.controller_props?.value)
+              if (!Number.isFinite(value) || value <= 0 || value === 8192) {
+                return
+              }
+              settings.ctx_auto = {
+                key: 'ctx_auto',
+                controller_props: { value: false },
+              }
+            })
+          })
+        }
+
         return state
       },
-      version: 17,
+      version: 19,
     }
   )
 )

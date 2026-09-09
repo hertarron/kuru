@@ -5,6 +5,7 @@ import {
 } from '@/components/ui/popover'
 import { Progress } from '@/components/ui/progress'
 import { useDownloadStore } from '@/hooks/useDownloadStore'
+import { useModelCalibration } from '@/hooks/useModelCalibration'
 import { useAppUpdater } from '@/hooks/useAppUpdater'
 import { useServiceHub } from '@/hooks/useServiceHub'
 import { events, AppEvent } from '@janhq/core'
@@ -110,12 +111,21 @@ export function DownloadManagement() {
     return [...downloadsWithProgress, ...localDownloadsWithoutProgress]
   }, [downloads, localDownloadingModels])
 
+  // A model measurement is not a download, but it is the other thing that runs
+  // for about a minute after the user has navigated away from the page that
+  // started it, and this is where they already look for that.
+  const calibrationRuns = useModelCalibration((state) => state.running)
+  const calibrating = useMemo(
+    () => Object.keys(calibrationRuns),
+    [calibrationRuns]
+  )
+
   const downloadCount = useMemo(() => {
     const modelDownloads = downloadProcesses.length
     const appUpdateDownload = appUpdateState.isDownloading ? 1 : 0
-    const total = modelDownloads + appUpdateDownload
+    const total = modelDownloads + appUpdateDownload + calibrating.length
     return total
-  }, [downloadProcesses, appUpdateState.isDownloading])
+  }, [downloadProcesses, appUpdateState.isDownloading, calibrating])
 
   const overallProgress = useMemo(() => {
     const modelTotal = downloadProcesses.reduce((acc, download) => {
@@ -211,6 +221,22 @@ export function DownloadManagement() {
     [removeDownload, removeLocalDownloadingModel, serviceHub, t]
   )
 
+  // A fit test can get stuck in first-time RAM warm-up; killing the probe
+  // backend-side frees memory at once, and the starter's in-flight await then
+  // rejects and drops the run. Clearing the run here first keeps a late
+  // probe result from being recorded after the user gave up on it.
+  const handleCancelCalibration = useCallback(
+    async (modelId: string) => {
+      try {
+        await serviceHub.models().cancelCalibrateModel()
+      } catch (e) {
+        console.error('Failed to cancel calibration:', modelId, e)
+      }
+      useModelCalibration.getState().endRun(modelId)
+    },
+    [serviceHub]
+  )
+
   useEffect(() => {
     events.on(AppEvent.onAppUpdateDownloadUpdate, onAppUpdateDownloadUpdate)
     events.on(AppEvent.onAppUpdateDownloadSuccess, onAppUpdateDownloadSuccess)
@@ -268,7 +294,9 @@ export function DownloadManagement() {
           onFocusOutside={(e) => e.preventDefault()}
         >
           <div className="flex flex-col">
-            {appUpdateState.isDownloading || downloadProcesses.length > 0 ? (
+            {appUpdateState.isDownloading ||
+            downloadProcesses.length > 0 ||
+            calibrating.length > 0 ? (
               <>
                 <div className="px-3 pt-2 flex items-center justify-between">
                   <p>
@@ -276,6 +304,39 @@ export function DownloadManagement() {
                   </p>
                 </div>
                 <div className="p-2 max-h-[300px] overflow-y-auto space-y-2">
+                  {calibrating.map((modelId) => (
+                    <div key={modelId} className="rounded-lg p-2 bg-secondary">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate">{modelId}</p>
+                        <div className="shrink-0 flex items-center space-x-0.5">
+                          <Button
+                            variant="secondary"
+                            size="icon-xs"
+                            onClick={() => handleCancelCalibration(modelId)}
+                          >
+                            <IconX
+                              size={16}
+                              className="text-muted-foreground cursor-pointer"
+                              title="Cancel fit test"
+                            />
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="relative z-40">
+                        {/* No percentage exists: the probe is one model load,
+                            and llama.cpp reports nothing until it finishes.
+                            First-time RAM warm-up dominates that load, so the
+                            label names it rather than the reading at the end. */}
+                        <Progress
+                          value={100}
+                          className="my-2 h-6 bg-muted-foreground/10 relative rounded-md animate-pulse"
+                        />
+                        <div className="absolute w-full top-1/2 transform -translate-y-1/2 flex items-center justify-between px-2">
+                          <p className="text-xs">Loading memory to measure use…</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                   {appUpdateState.isDownloading && (
                     <div className="rounded-lg p-2 bg-secondary">
                       <div className="flex items-center justify-between">

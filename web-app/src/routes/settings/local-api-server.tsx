@@ -255,8 +255,8 @@ function LocalAPIServerContent() {
   const isServerRunning = serverStatus !== 'stopped'
 
   return (
-    <div className="flex flex-col h-svh w-full">
-      <HeaderPage>
+    <div className="flex flex-col h-full w-full">
+      <HeaderPage className="h-auto pt-[calc(var(--spacing)*1.7)] pb-[calc(var(--spacing)*2.5)]">
         <div
           className={cn(
             'flex items-center justify-between w-full mr-2 pr-3',
@@ -268,7 +268,7 @@ function LocalAPIServerContent() {
           </span>
           <Popover>
             <PopoverTrigger asChild>
-              <Button size="sm" variant="outline" className="relative z-50">
+              <Button size="sm" variant="outline" className="relative z-50 -my-1">
                 <IconSettings2 size={16} />
                 Configuration
               </Button>
@@ -414,7 +414,7 @@ function LocalAPIServerContent() {
           </Popover>
         </div>
       </HeaderPage>
-      <div className="flex h-[calc(100%-60px)]">
+      <div className="flex flex-1 min-h-0">
         <SettingsMenu />
         <div className="flex-1 flex flex-col min-h-0 pl-0">
           <div className="flex-1 overflow-y-auto p-4 pt-0">

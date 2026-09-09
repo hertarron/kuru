@@ -14,7 +14,7 @@ const h = vi.hoisted(() => {
     checkForUpdate: vi.fn(),
     setServers: vi.fn(),
     setSettings: vi.fn(),
-    setAssistants: vi.fn(),
+    setCharacters: vi.fn(),
     setThreads: vi.fn(),
     setThreadsLoading: vi.fn(),
     threadsInStore: {} as Record<string, unknown>,
@@ -70,8 +70,8 @@ vi.mock('@/hooks/useMCPServers', () => ({
   DEFAULT_MCP_SETTINGS: { foo: 'bar' },
 }))
 
-vi.mock('@/hooks/useAssistant', () => ({
-  useAssistant: () => ({ setAssistants: h.setAssistants }),
+vi.mock('@/hooks/useCharacters', () => ({
+  useCharacters: () => ({ setCharacters: h.setCharacters }),
 }))
 
 vi.mock('@/lib/extension', () => ({
@@ -168,6 +168,8 @@ vi.mock('@/hooks/useServiceHub', () => {
     providers: () => ({ getProviders: hubState.getProviders }),
     mcp: () => ({ getMCPConfig: hubState.getMCPConfig }),
     assistants: () => ({ getAssistants: hubState.getAssistants }),
+    lorebooks: () => ({ getLorebooks: () => Promise.resolve([]) }),
+    personas: () => ({ getPersonas: () => Promise.resolve([]) }),
     threads: () => ({ fetchThreads: hubState.fetchThreads }),
     deeplink: () => ({
       getCurrent: hubState.deeplinkGetCurrent,
@@ -261,7 +263,7 @@ describe('DataProvider', () => {
       ])
       expect(h.setServers).toHaveBeenCalledWith({ a: 1 })
       expect(h.setSettings).toHaveBeenCalledWith({ s: 1 })
-      expect(h.setAssistants).toHaveBeenCalledWith([{ id: 'a1' }])
+      expect(h.setCharacters).toHaveBeenCalledWith([{ id: 'a1' }])
       expect(h.setThreads).toHaveBeenCalledWith([{ id: 't1' }])
     })
   })
@@ -347,7 +349,7 @@ describe('DataProvider', () => {
     hubState.getAssistants.mockResolvedValue([])
     render(<DataProvider />)
     await waitFor(() => {
-      expect(h.setAssistants).toHaveBeenCalledWith(null)
+      expect(h.setCharacters).toHaveBeenCalledWith(null)
     })
   })
 
@@ -357,7 +359,7 @@ describe('DataProvider', () => {
     render(<DataProvider />)
     await waitFor(() => {
       expect(warn).toHaveBeenCalledWith(
-        'Failed to load assistants, keeping default:',
+        'Failed to load characters, keeping default:',
         expect.any(Error),
       )
     })
@@ -567,3 +569,5 @@ describe('DataProvider', () => {
     expect(h.navigate).not.toHaveBeenCalled()
   })
 })
+
+

@@ -25,10 +25,17 @@ export interface ModelProps {
   isSleeping?: boolean
 }
 
+export interface GgufTensorInfo {
+  name: string
+  dims: number[]
+  ggml_type: number
+}
+
 export interface GgufMetadata {
   version: number
   tensor_count: number
   metadata: Record<string, string>
+  tensors: GgufTensorInfo[]
 }
 
 // llama.cpp settings
@@ -44,6 +51,7 @@ export type LlamacppConfig = {
   models_max: string | number
   timeout: number
   llamacpp_env: string
+  kuru_fit: boolean
   fit: boolean
   fit_target: string
   fit_ctx: string

@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Jan",
+  "productName": "Kuru",
   "version": "0.8.4",
   "identifier": "jan.ai.app",
   "build": {
     "frontendDist": "../web-app/dist",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:5373",
     "beforeDevCommand": "cross-env IS_TAURI=true IS_DEV=true yarn dev:web",
     "beforeBuildCommand": "cross-env IS_TAURI=true yarn build:web"
   },
@@ -70,3 +70,4 @@
     "resources": ["resources/LICENSE"]
   }
 }
+

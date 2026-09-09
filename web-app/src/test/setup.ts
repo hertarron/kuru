@@ -41,11 +41,6 @@ const mockServiceHub = {
     relocateJanDataFolder: vi.fn().mockResolvedValue(undefined),
     getJanDataFolder: vi.fn().mockResolvedValue('/mock/jan/data'),
   }),
-  analytic: () => ({
-    track: vi.fn(),
-    identify: vi.fn(),
-    page: vi.fn(),
-  }),
   messages: () => ({
     createMessage: vi.fn().mockResolvedValue({ id: 'test-message' }),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
@@ -146,6 +141,15 @@ vi.mock('@/hooks/useServiceHub', () => ({
   initializeServiceHubStore: vi.fn(),
   isServiceHubInitialized: () => true,
 }))
+
+// jsdom ships no ResizeObserver; PillRow measures the toolbar row with one.
+// Widths are all 0 here, which is the state the fitter treats as "not
+// measured yet" and leaves the labels whole.
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver
 
 // Mock window.matchMedia for useMediaQuery tests
 Object.defineProperty(window, 'matchMedia', {

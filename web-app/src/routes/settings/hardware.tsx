@@ -6,7 +6,12 @@ import { Card, CardItem } from '@/containers/Card'
 import { Switch } from '@/components/ui/switch'
 import { Progress } from '@/components/ui/progress'
 import { useTranslation } from '@/i18n/react-i18next-compat'
-import { useHardware } from '@/hooks/useHardware'
+import {
+  gpuMemoryUsage,
+  isDisplayGpu,
+  resolveGpuReserveMiB,
+  useHardware,
+} from '@/hooks/useHardware'
 import { useLlamacppDevices } from '@/hooks/useLlamacppDevices'
 import { useEffect, useState } from 'react'
 import { IconDeviceDesktopAnalytics } from '@tabler/icons-react'
@@ -17,6 +22,23 @@ import { toNumber } from '@/utils/number'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { useAppState } from '@/hooks/useAppState'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { DEFAULT_VRAM_SAFETY_MARGIN_BYTES } from '@/lib/contextPlanner'
+
+/** VRAM a model can use on one card, in MiB. Mirrors `freeVramByGpu`. */
+function plannableMiB(
+  device: { id: string; name: string; mem: number; free: number },
+  usage: SystemUsage,
+  hardware: HardwareData,
+  reserves: Record<string, number>
+): number {
+  const used =
+    gpuMemoryUsage(usage, hardware, device.name)?.used ??
+    Math.max(0, device.mem - device.free)
+  const margin = DEFAULT_VRAM_SAFETY_MARGIN_BYTES / (1024 * 1024)
+  const reserve = resolveGpuReserveMiB(usage, hardware, device, reserves)
+  return Math.max(0, device.mem - used - margin - reserve)
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const Route = createFileRoute(route.settings.hardware as any)({
@@ -33,6 +55,8 @@ function HardwareContent() {
     setHardwareData,
     updateSystemUsage,
     pollingPaused,
+    gpuReserveMiB,
+    setGpuReserve,
   } = useHardware()
   const setActiveModels = useAppState((state) => state.setActiveModels)
 
@@ -137,14 +161,14 @@ function HardwareContent() {
   }
 
   return (
-    <div className="flex flex-col h-svh w-full">
-      <HeaderPage>
+    <div className="flex flex-col h-full w-full">
+      <HeaderPage className="h-auto pt-[calc(var(--spacing)*1.7)] pb-[calc(var(--spacing)*2.5)]">
         <div className={cn("flex items-center justify-between w-full mr-2 pr-3", !IS_MACOS && "pr-30")}>
           <span className='font-medium text-base font-studio'>{t('common:settings')}</span>
           <Button
             variant="outline"
             size="sm"
-            className="flex items-center gap-2 relative z-50"
+            className="flex items-center gap-2 relative z-50 -my-1"
             onClick={handleClickSystemMonitor}
           >
             <IconDeviceDesktopAnalytics className="text-muted-foreground size-5" />
@@ -152,7 +176,7 @@ function HardwareContent() {
           </Button>
         </div>
       </HeaderPage>
-      <div className="flex h-[calc(100%-60px)]">
+      <div className="flex flex-1 min-h-0">
         <SettingsMenu />
         <div className="p-4 pt-0 w-full overflow-y-auto">
           {isLoading ? (
@@ -356,12 +380,81 @@ function HardwareContent() {
                         <div className="mt-3">
                           <CardItem
                             title={t('settings:hardware.vram')}
+                            description="What a model can use here: the card less whatever is on it, less the memory no CUDA process can reach, less the reserve below."
                             actions={
                               <span className="text-foreground">
-                                {formatMegaBytes(device.free)}{' '}
+                                {formatMegaBytes(
+                                  plannableMiB(
+                                    device,
+                                    systemUsage,
+                                    hardwareData,
+                                    gpuReserveMiB
+                                  )
+                                                                )}{' '}
                                 {t('settings:hardware.freeOf')}{' '}
                                 {formatMegaBytes(device.mem)}
                               </span>
+                            }
+                          />
+                        </div>
+                        {(() => {
+                          const live = gpuMemoryUsage(
+                            systemUsage,
+                            hardwareData,
+                            device.name
+                          )
+                          if (!live) return null
+                          const percent =
+                            toNumber(live.used / live.total) * 100
+                          return (
+                            <div className="mt-3">
+                              <CardItem
+                                title={t('settings:hardware.usage')}
+                                actions={
+                                  <div className="flex items-center gap-2">
+                                    <Progress
+                                      value={percent}
+                                      className="h-2 w-10 border"
+                                    />
+                                    <span className="text-foreground">
+                                      {formatMegaBytes(live.used)} /{' '}
+                                      {formatMegaBytes(live.total)}
+                                    </span>
+                                  </div>
+                                }
+                              />
+                            </div>
+                          )
+                        })()}
+                        <div className="mt-3">
+                          <CardItem
+                            title="Reserved memory (MB)"
+                            description={
+                              isDisplayGpu(systemUsage, hardwareData, device.name)
+                                ? 'Kept free of models, on top of what this card already has in use. It is driving a display, so raise this if the desktop stutters while a model is loaded.'
+                                : 'Kept free of models, on top of what this card already has in use. Raise it if this card also drives a display or runs anything else.'
+                            }
+                            actions={
+                              <Input
+                                className="w-24 text-right"
+                                type="number"
+                                min={0}
+                                step={128}
+                                value={String(
+                                  resolveGpuReserveMiB(
+                                    systemUsage,
+                                    hardwareData,
+                                    device,
+                                    gpuReserveMiB
+                                  )
+                                )}
+                                onChange={(e) =>
+                                  setGpuReserve(
+                                    device.id,
+                                    toNumber(e.target.value)
+                                  )
+                                }
+                              />
                             }
                           />
                         </div>

@@ -23,11 +23,18 @@ export interface ProviderCaps {
 
 const CORE_ONLY = new Set<SamplerCap>(['core', 'client_only'])
 
-const set = (...c: SamplerCap[]) =>
-  new Set<SamplerCap>([...CORE_ONLY, ...c])
+const set = (...c: SamplerCap[]) => new Set<SamplerCap>([...CORE_ONLY, ...c])
+
+/**
+ * Same, plus `stop`. Every OpenAI-shaped endpoint takes a `stop` array in the
+ * request body; Anthropic and Google name the field differently, so they use
+ * plain `set` and the param is stripped for them rather than sent under a name
+ * they reject.
+ */
+const setOai = (...c: SamplerCap[]) => set('stop', ...c)
 
 const OPENAI_STRICT: ProviderCaps = {
-  supported: set('penalties', 'json_schema'),
+  supported: setOai('penalties', 'json_schema'),
   maybe: new Set(),
 }
 
@@ -42,32 +49,32 @@ const GOOGLE: ProviderCaps = {
 }
 
 const COHERE: ProviderCaps = {
-  supported: set('top_k', 'penalties'),
+  supported: setOai('top_k', 'penalties'),
   maybe: new Set(),
 }
 
 const MISTRAL: ProviderCaps = {
-  supported: set('penalties'),
+  supported: setOai('penalties'),
   maybe: new Set(),
 }
 
 const GROQ: ProviderCaps = {
-  supported: set(),
+  supported: setOai(),
   maybe: new Set(['penalties']),
 }
 
 const OPENROUTER: ProviderCaps = {
-  supported: set('penalties', 'top_k', 'min_p', 'repetition'),
+  supported: setOai('penalties', 'top_k', 'min_p', 'repetition'),
   maybe: new Set(['typical_p']),
 }
 
 const XAI: ProviderCaps = {
-  supported: set(),
+  supported: setOai(),
   maybe: new Set(['penalties']),
 }
 
 const HUGGINGFACE: ProviderCaps = {
-  supported: set('penalties'),
+  supported: setOai('penalties'),
   maybe: new Set([
     'top_k',
     'min_p',
@@ -77,22 +84,22 @@ const HUGGINGFACE: ProviderCaps = {
 }
 
 const NVIDIA: ProviderCaps = {
-  supported: set('penalties'),
+  supported: setOai('penalties'),
   maybe: new Set(['top_k']),
 }
 
 const AZURE: ProviderCaps = {
-  supported: set('penalties', 'json_schema'),
+  supported: setOai('penalties', 'json_schema'),
   maybe: new Set(),
 }
 
 const MINIMAX: ProviderCaps = {
-  supported: set('penalties'),
+  supported: setOai('penalties'),
   maybe: new Set(),
 }
 
 const LLAMACPP: ProviderCaps = {
-  supported: set(
+  supported: setOai(
     'penalties',
     'top_k',
     'min_p',
@@ -114,7 +121,7 @@ const LLAMACPP: ProviderCaps = {
 }
 
 const MLX: ProviderCaps = {
-  supported: set('top_k', 'repetition'),
+  supported: setOai('top_k', 'repetition'),
   maybe: new Set(),
 }
 
@@ -124,7 +131,7 @@ const MLX: ProviderCaps = {
  * common samplers (marked "may be ignored") is more useful than hiding them.
  */
 const CUSTOM_PERMISSIVE: ProviderCaps = {
-  supported: set(),
+  supported: setOai(),
   maybe: new Set([
     'penalties',
     'top_k',

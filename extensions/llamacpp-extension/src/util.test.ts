@@ -6,6 +6,7 @@ import {
   detectTemplateKwargsFromChatTemplate,
   estimateTokensFromText,
   getProxyConfig,
+  resolveImportedModelName,
   truncateToTokenBudget,
 } from './util'
 import { getBackendSetting } from './backend-settings'
@@ -671,5 +672,45 @@ describe('detectTemplateKwargsFromChatTemplate', () => {
     expect(detectTemplateKwargsFromChatTemplate(tpl)).toEqual([
       { name: 'add_notes', type: 'boolean', default: true },
     ])
+  })
+})
+
+describe('resolveImportedModelName', () => {
+  it('keeps the filename over a stale base-model name', () => {
+    // Real headers: a Mistral-Nemo finetune that never updated general.name,
+    // and a quantizer's working name shipped as the release name.
+    expect(
+      resolveImportedModelName(
+        'A:\\models\\Rocinante-XL-16B-v1a-Q4_K_M.gguf',
+        'Mistral Nemo Instruct 2407'
+      )
+    ).toBe('Rocinante-XL-16B-v1a-Q4_K_M')
+    expect(
+      resolveImportedModelName(
+        '/models/Qwen3.8-27B-Uncensored-IQ2_M.gguf',
+        'Abl 27b'
+      )
+    ).toBe('Qwen3.8-27B-Uncensored-IQ2_M')
+  })
+
+  it('falls back to the metadata name when the filename says nothing', () => {
+    expect(
+      resolveImportedModelName('/models/ggml-model-Q4_K_M.gguf', 'Qwen3.5 9B')
+    ).toBe('Qwen3.5-9B')
+    expect(resolveImportedModelName('/models/model.gguf', 'Qwen3.5 9B')).toBe(
+      'Qwen3.5-9B'
+    )
+  })
+
+  it('drops a shard suffix', () => {
+    expect(
+      resolveImportedModelName('/m/Qwen3-235B-Q4_K_M-00001-of-00005.gguf', '')
+    ).toBe('Qwen3-235B-Q4_K_M')
+  })
+
+  it('returns undefined when neither source names anything', () => {
+    expect(resolveImportedModelName('/models/model.gguf', undefined)).toBe(
+      undefined
+    )
   })
 })

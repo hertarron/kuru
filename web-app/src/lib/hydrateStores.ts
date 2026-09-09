@@ -3,10 +3,6 @@ import { useInterfaceSettings } from '@/hooks/useInterfaceSettings'
 import { useGeneralSetting } from '@/hooks/useGeneralSetting'
 import { useLeftPanel } from '@/hooks/useLeftPanel'
 import { useModelProvider } from '@/hooks/useModelProvider'
-import {
-  useProductAnalytic,
-  useProductAnalyticPrompt,
-} from '@/hooks/useAnalytic'
 import { useHardware } from '@/hooks/useHardware'
 import { useLocalApiServer } from '@/hooks/useLocalApiServer'
 import { useToolApproval } from '@/hooks/useToolApproval'
@@ -15,11 +11,16 @@ import { useDownloadStore } from '@/hooks/useDownloadStore'
 import { useProxyConfig } from '@/hooks/useProxyConfig'
 import { useVulkan } from '@/hooks/useVulkan'
 import { useFavoriteModel } from '@/hooks/useFavoriteModel'
+import { useModelCalibration } from '@/hooks/useModelCalibration'
 import { useLatestJanModel } from '@/hooks/useLatestJanModel'
 import { useJanModelPromptDismissed } from '@/hooks/useJanModelPrompt'
 import { useDefaultEmbeddingModel } from '@/hooks/useDefaultEmbeddingModel'
 import { useAgentMode } from '@/hooks/useAgentMode'
 import { useWebSearchConfig } from '@/hooks/useWebSearchConfig'
+import { useLorebookSettings } from '@/hooks/useLorebookSettings'
+import { useMemorySettings } from '@/hooks/useMemorySettings'
+import { useThreadMemory } from '@/hooks/useThreadMemory'
+import { useRpTextSettings } from '@/hooks/useRpTextSettings'
 
 /**
  * Stores persisted through `backendStorage` set `skipHydration: true` so they
@@ -36,8 +37,6 @@ const secondaryStores = [
   useGeneralSetting,
   useLeftPanel,
   useModelProvider,
-  useProductAnalytic,
-  useProductAnalyticPrompt,
   useHardware,
   useLocalApiServer,
   useToolApproval,
@@ -46,11 +45,16 @@ const secondaryStores = [
   useProxyConfig,
   useVulkan,
   useFavoriteModel,
+  useModelCalibration,
   useLatestJanModel,
   useJanModelPromptDismissed,
   useDefaultEmbeddingModel,
   useAgentMode,
   useWebSearchConfig,
+  useLorebookSettings,
+  useRpTextSettings,
+  useMemorySettings,
+  useThreadMemory,
 ] as const
 
 export async function hydrateBackendStores(): Promise<void> {

@@ -1,6 +1,8 @@
 /**
  * Default Models Service - Web implementation
  */
+import type { GgufMetadata } from '@janhq/tauri-plugin-llamacpp-api'
+import type { CalibrationReport } from '@/hooks/useModelCalibration'
 
 import { sanitizeModelId } from '@/lib/utils'
 import {
@@ -376,6 +378,19 @@ export class DefaultModelsService implements ModelsService {
     return this.getEngine(provider)?.unload(model)
   }
 
+  async evictForLoad(model: string, provider?: string): Promise<boolean> {
+    const engine = this.getEngine(provider ?? 'llamacpp') as AIEngine & {
+      evictForLoad?: (id: string) => Promise<boolean>
+    }
+    if (typeof engine?.evictForLoad !== 'function') return false
+    try {
+      return await engine.evictForLoad(model)
+    } catch (error) {
+      console.error(`Error evicting for ${model}:`, error)
+      return false
+    }
+  }
+
   async stopAllModels(): Promise<void> {
     const llamaCppModels = await this.getActiveModels('llamacpp')
     if (llamaCppModels)
@@ -456,6 +471,40 @@ export class DefaultModelsService implements ModelsService {
     if (!engine) return false
 
     return engine.isToolSupported(modelId)
+  }
+
+  async readModelGguf(modelId: string): Promise<GgufMetadata | undefined> {
+    const engine = this.getEngine('llamacpp') as AIEngine & {
+      readModelGguf?: (id: string) => Promise<GgufMetadata>
+    }
+    if (typeof engine?.readModelGguf !== 'function') return undefined
+    try {
+      return await engine.readModelGguf(modelId)
+    } catch (error) {
+      console.error(`Error reading GGUF header for ${modelId}:`, error)
+      return undefined
+    }
+  }
+
+  async calibrateModel(modelId: string): Promise<CalibrationReport | undefined> {
+    const engine = this.getEngine('llamacpp') as AIEngine & {
+      calibrate?: (id: string) => Promise<CalibrationReport>
+    }
+    if (typeof engine?.calibrate !== 'function') return undefined
+    return await engine.calibrate(modelId)
+  }
+
+  async cancelCalibrateModel(): Promise<boolean> {
+    const engine = this.getEngine('llamacpp') as AIEngine & {
+      cancelCalibrate?: () => Promise<boolean>
+    }
+    if (typeof engine?.cancelCalibrate !== 'function') return false
+    try {
+      return await engine.cancelCalibrate()
+    } catch (error) {
+      console.error('Error cancelling calibration:', error)
+      return false
+    }
   }
 
   async checkMmprojExistsAndUpdateOffloadMMprojSetting(
@@ -579,6 +628,37 @@ export class DefaultModelsService implements ModelsService {
       console.error(`Error checking mmproj for model ${modelId}:`, error)
     }
     return false
+  }
+
+  async getModelExtraSizes(
+    modelId: string
+  ): Promise<
+    | {
+        mmprojBytes: number
+        mtp: boolean
+        mtpModelPath?: string
+        mtpDraftBytes: number
+        mtpDraftHeader?: GgufMetadata
+      }
+    | undefined
+  > {
+    try {
+      const engine = this.getEngine('llamacpp') as AIEngine & {
+        getModelExtraSizes?: (id: string) => Promise<{
+          mmprojBytes: number
+          mtp: boolean
+          mtpModelPath?: string
+          mtpDraftBytes: number
+          mtpDraftHeader?: GgufMetadata
+        }>
+      }
+      if (engine && typeof engine.getModelExtraSizes === 'function') {
+        return await engine.getModelExtraSizes(modelId)
+      }
+    } catch (error) {
+      console.error(`Error reading model sizes for ${modelId}:`, error)
+    }
+    return undefined
   }
 
   async getMtpInfo(modelId: string): Promise<{

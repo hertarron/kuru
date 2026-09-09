@@ -2,7 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use std::convert::TryFrom;
 use std::io::{self, BufReader, Read, Seek};
 
-use super::types::{GgufMetadata, GgufValueType};
+use super::types::{GgufMetadata, GgufTensorInfo, GgufValueType};
 
 pub fn read_gguf_metadata<R: Read + Seek>(reader: R) -> io::Result<GgufMetadata> {
     let mut file = BufReader::new(reader);
@@ -35,10 +35,45 @@ pub fn read_gguf_metadata<R: Read + Seek>(reader: R) -> io::Result<GgufMetadata>
         }
     }
 
+    let mut tensors = Vec::with_capacity(tensor_count.min(4096) as usize);
+    for i in 0..tensor_count {
+        tensors.push(read_tensor_info(&mut file).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Error reading tensor info {}: {}", i, e),
+            )
+        })?);
+    }
+
     Ok(GgufMetadata {
         version,
         tensor_count,
         metadata: metadata_map,
+        tensors,
+    })
+}
+
+fn read_tensor_info<R: Read + Seek + ReadBytesExt>(reader: &mut R) -> io::Result<GgufTensorInfo> {
+    let name = read_gguf_string(reader)?;
+    let n_dims = reader.read_u32::<LittleEndian>()?;
+    if n_dims > 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Tensor {} has {} dimensions", name, n_dims),
+        ));
+    }
+    let mut dims = Vec::with_capacity(n_dims as usize);
+    for _ in 0..n_dims {
+        dims.push(reader.read_u64::<LittleEndian>()?);
+    }
+    let ggml_type = reader.read_u32::<LittleEndian>()?;
+    // The data offset follows. Sizes come from dims and type, so it is skipped.
+    reader.seek(io::SeekFrom::Current(8))?;
+
+    Ok(GgufTensorInfo {
+        name,
+        dims,
+        ggml_type,
     })
 }
 
