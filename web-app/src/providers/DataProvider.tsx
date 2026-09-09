@@ -7,7 +7,7 @@ import {
   CHUB_TOKEN_SECRET_KEY,
 } from '@/hooks/useGeneralSetting'
 import { useServiceHub } from '@/hooks/useServiceHub'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useMCPServers, DEFAULT_MCP_SETTINGS } from '@/hooks/useMCPServers'
 import { useCharacters } from '@/hooks/useCharacters'
 import { useLorebooks } from '@/hooks/useLorebooks'
@@ -21,6 +21,7 @@ import { useAppState } from '@/hooks/useAppState'
 import { AppEvent, events } from '@janhq/core'
 import { SystemEvent } from '@/types/events'
 import { isDev } from '@/lib/utils'
+import { sweepThreadWorkspaces } from '@/lib/agentTools'
 import { invoke } from '@tauri-apps/api/core'
 import { providerHasRemoteApiKeys, providerRemoteApiKeyChain } from '@/lib/provider-api-keys'
 
@@ -189,6 +190,9 @@ export function DataProvider() {
   const { setCharacters } = useCharacters()
   const { setThreads } = useThreads()
   const setThreadsLoading = useThreads((s) => s.setThreadsLoading)
+  // The thread fetch re-runs on extension re-registration; the sandbox sweep
+  // should not.
+  const sweptWorkspaces = useRef(false)
   const navigate = useNavigate()
   const serviceHub = useServiceHub()
 
@@ -331,6 +335,15 @@ export function DataProvider() {
           }
           setThreads(threads)
           setThreadsLoading(false)
+          // Collect agent sandboxes whose thread is gone (crash, or a thread
+          // deleted while the app was closed). Once per session, and only on a
+          // non-empty result: sweeping against an empty list would delete live
+          // sandboxes if this fetch were still a transient not-ready state.
+          // Leftovers then wait for the next startup that does see threads.
+          if (!sweptWorkspaces.current && threads.length > 0) {
+            sweptWorkspaces.current = true
+            sweepThreadWorkspaces(threads.map((t) => t.id))
+          }
         })
         .catch(() => {
           if (cancelled) return

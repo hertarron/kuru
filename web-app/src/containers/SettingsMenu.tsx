@@ -17,6 +17,7 @@ import {
   IconCpu,
   IconWorld,
   IconWorldSearch,
+  IconFolderCode,
   IconPaperclip,
   IconUserCircle,
 } from '@tabler/icons-react'
@@ -206,6 +207,11 @@ const SettingsMenu = () => {
       title: 'common:web_search',
       route: route.settings.web_search,
       icon: IconWorldSearch,
+    },
+    {
+      title: 'common:agent_tools',
+      route: route.settings.agent_tools,
+      icon: IconFolderCode,
     },
     {
       title: 'common:keyboardShortcuts',

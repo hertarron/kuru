@@ -1,6 +1,12 @@
 export interface TokenCounterVisibilityInput {
   hasSelectedModel: boolean
   isAgentMode: boolean
+  /* Accepted for call-site compatibility with upstream; the counter is a
+   * permanent fixture here, so none of these gate it. */
+  isInitialMessage?: boolean
+  hasMessages?: boolean
+  hasPromptText?: boolean
+  hasReportedUsage?: boolean
 }
 
 /**

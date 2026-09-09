@@ -43,4 +43,38 @@ describe('shouldShowTokenCounter', () => {
   it('shows on the new-thread composer, before the first send', () => {
     expect(shouldShowTokenCounter(base)).toBe(true)
   })
+
+  // Cowork keeps no thread messages and mounts a permanently "initial" input,
+  // so every one of the thread-shaped conditions is false for it.
+  describe('reported usage', () => {
+    const cowork = {
+      ...base,
+      isInitialMessage: true,
+      hasMessages: false,
+      hasPromptText: false,
+    }
+
+    it('shows once a surface reports usage of its own', () => {
+      expect(
+        shouldShowTokenCounter({ ...cowork, hasReportedUsage: true })
+      ).toBe(true)
+    })
+
+    it('does not override the model and agent-mode conditions', () => {
+      expect(
+        shouldShowTokenCounter({
+          ...cowork,
+          hasReportedUsage: true,
+          hasSelectedModel: false,
+        })
+      ).toBe(false)
+      expect(
+        shouldShowTokenCounter({
+          ...cowork,
+          hasReportedUsage: true,
+          isAgentMode: true,
+        })
+      ).toBe(false)
+    })
+  })
 })

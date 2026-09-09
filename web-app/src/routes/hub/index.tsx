@@ -3,7 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { route } from '@/constants/routes'
 import { useModelSources } from '@/hooks/useModelSources'
 import { cn, sanitizeModelId } from '@/lib/utils'
-import { isMtpQuant } from '@/lib/mtp'
+import { isSpecSidecar } from '@/lib/specDraft'
 import {
   useState,
   useMemo,
@@ -163,13 +163,14 @@ function HubContent() {
   }, [searchValue])
 
   const filteredModels = useMemo(() => {
-    // MTP companion ggufs are draft models, not standalone variants — move them
-    // out of `quants` (so they don't show as downloadable) into `mtpQuants`,
-    // where DownloadButton resolves them against the chosen quant.
+    // Speculative draft companions (mtp/eagle3/dflash/dspark) are draft models,
+    // not standalone variants — move them out of `quants` (so they don't show
+    // as downloadable) into `specQuants`, where DownloadButton resolves them
+    // against the chosen quant.
     let filtered: CatalogModel[] = sortedModels.map((model) => ({
       ...model,
-      quants: model.quants?.filter((q) => !isMtpQuant(q)),
-      mtpQuants: model.quants?.filter((q) => isMtpQuant(q)),
+      quants: model.quants?.filter((q) => !isSpecSidecar(q)),
+      specQuants: model.quants?.filter((q) => isSpecSidecar(q)),
     }))
     // Apply search filter
     if (debouncedSearchValue.length) {

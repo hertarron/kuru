@@ -1,6 +1,8 @@
 export const route = {
   // home as new chat or thread
   home: '/',
+  cowork: '/cowork',
+  artifacts: '/artifacts',
   appLogs: '/logs',
   project: '/project',
   projectDetail: '/project/$projectId',
@@ -17,6 +19,7 @@ export const route = {
     mcp_servers: '/settings/mcp-servers',
     https_proxy: '/settings/https-proxy',
     web_search: '/settings/web-search',
+    agent_tools: '/settings/agent-tools',
     hardware: '/settings/hardware',
     characters: '/settings/characters',
     lorebooks: '/settings/lorebooks',
@@ -41,3 +44,10 @@ export const route = {
   systemMonitor: '/system-monitor',
   threadsDetail: '/threads/$threadId',
 }
+
+/**
+ * Routes belonging to the Cowork surface, so the sidebar keeps the Cowork nav
+ * instead of falling back to Home. A new Cowork route only has to be added here.
+ */
+export const isCoworkRoute = (pathname: string): boolean =>
+  pathname === route.cowork || pathname === route.artifacts

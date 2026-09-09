@@ -154,7 +154,9 @@ function engineStage(
     const match = evaluateBackendGpuMatch(gpus, report.backend)
     // On a fresh install the engine is still downloading a backend, so there is
     // nothing to judge yet. Reported as in-progress, never as a warning: it
-    // resolves on its own and the checklist re-runs when it does.
+    // resolves on its own and the checklist re-runs when it does. Upstream
+    // turned this into a settled CPU verdict, which is right for a bundled
+    // engine and wrong for a downloader.
     if (match.kind === 'unknown') {
       return {
         id: 'engine',

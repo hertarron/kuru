@@ -1,7 +1,9 @@
 import { DownloadManagement } from '@/containers/DownloadManegement'
 import { NavChats } from './NavChats'
+import { NavCowork } from './NavCowork'
 import { NavMain } from './NavMain'
 import { NavProjects } from './NavProjects'
+import { NavTabs } from './NavTabs'
 
 import {
   Sidebar,
@@ -14,12 +16,16 @@ import {
 import { cn } from '@/lib/utils'
 import { useSidebarLocked } from '@/lib/sidebar-routes'
 import { useTitlebarLayout } from '@/stores/titlebar-layout-store'
+import { useLocation } from '@tanstack/react-router'
+import { isCoworkRoute } from '@/constants/routes'
 
 export function LeftSidebar() {
   // Settings/hub lock the sidebar expanded; outside those, the download stack
   // only fits the expanded header (it is hidden on the collapsed icon rail).
   const locked = useSidebarLocked()
   const { state } = useSidebar()
+  const { pathname } = useLocation()
+  const isCowork = isCoworkRoute(pathname)
   // Right-align the header when native controls own the top-left (macOS, or a Linux
   // DE placing buttons left); "Jan" moves into the right cluster except on macOS.
   const leftButtons = useTitlebarLayout((s) => s.layout.left.length)
@@ -45,11 +51,16 @@ export function LeftSidebar() {
               )}
             </div>
           </div>
-          <NavMain />
+          <NavTabs />
+          {isCowork ? <NavCowork /> : <NavMain />}
         </SidebarHeader>
         <SidebarContent className="mask-b-from-95% mask-t-from-98%">
-          <NavProjects />
-          <NavChats />
+          {!isCowork && (
+            <>
+              <NavProjects />
+              <NavChats />
+            </>
+          )}
         </SidebarContent>
         {!locked && <SidebarRail />}
       </Sidebar>

@@ -4,6 +4,7 @@
 
 import { SessionInfo, modelInfo, ThreadMessage, UnloadResult } from '@janhq/core'
 import type { CalibrationReport } from '@/hooks/useModelCalibration'
+import type { SpecDraftKind } from '@janhq/core'
 import { Model as CoreModel } from '@janhq/core'
 
 // Types for model catalog
@@ -37,7 +38,7 @@ export interface CatalogModel {
   quants?: ModelQuant[]
   // MTP draft companions split out of `quants` for display; resolved against
   // the chosen quant at download time (see lib/mtp.ts).
-  mtpQuants?: ModelQuant[]
+  specQuants?: ModelQuant[]
   mmproj_models?: MMProjModel[]
   num_mmproj?: number
   safetensors_files?: SafetensorsFile[]
@@ -122,7 +123,8 @@ export interface ModelsService {
     mmprojPath?: string,
     mmprojSha256?: string,
     mmprojSize?: number,
-    mtpPath?: string
+    specDraftPath?: string,
+    specDraftKind?: SpecDraftKind
   ): Promise<void>
   pullModelWithMetadata(
     id: string,
@@ -130,7 +132,8 @@ export interface ModelsService {
     mmprojPath?: string,
     hfToken?: string,
     skipVerification?: boolean,
-    mtpPath?: string
+    specDraftPath?: string,
+    specDraftKind?: SpecDraftKind
   ): Promise<void>
   abortDownload(id: string): Promise<void>
   pauseDownload(id: string): Promise<void>
@@ -232,6 +235,15 @@ export type EmbeddingVectorProblem =
   | 'nonFinite'
   | 'degenerate'
 
+/**
+ * `noGpuHardware`: a GPU build is installed on a machine with no GPU. kuru
+ * downloads backends, so the user can pick one their hardware cannot use --
+ * upstream dropped this reason because its bundled engine cannot be in that
+ * state. `runtimeUnreachable`: a GPU exists but the engine cannot see it
+ * (driver or runtime). `missingLibrary`: same symptom, cause established.
+ *
+ * Mirrors GpuOffloadReason in extensions/llamacpp-extension/src/readiness.ts.
+ */
 export type GpuOffloadReason =
   | 'noGpuHardware'
   | 'runtimeUnreachable'
@@ -244,8 +256,12 @@ interface ReadinessReport {
   /** The engine build cannot run this check at all. */
   unavailable?: boolean
   /**
-   * The engine has not finished its own setup, so nothing was concluded. Distinct
-   * from `unavailable`: this one resolves on its own.
+   * The engine has not finished its own setup, so nothing was concluded.
+   * Distinct from `unavailable`: this one resolves on its own.
+   *
+   * Nothing sets it any more -- it existed for the window while a backend was
+   * downloading, and the engine now ships with the app. Kept because the
+   * embedding model is still fetched on first run and may need it again.
    */
   pending?: boolean
 }

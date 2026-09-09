@@ -24,7 +24,7 @@ import { useRecommendedQuant } from '@/hooks/useRecommendedQuant'
 import { extractDescription, extractModelName } from '@/lib/models'
 import { cleanModelReadme, huggingFaceRepoUrl } from '@/lib/model-readme'
 import { getQuantTier } from '@/lib/quant-tier'
-import { isMtpQuant } from '@/lib/mtp'
+import { isSpecSidecar } from '@/lib/specDraft'
 import { formatBytes, cn } from '@/lib/utils'
 import { sumMlxModelBytes } from '@/lib/modelCompatibility'
 import { useGeneralSetting } from '@/hooks/useGeneralSetting'
@@ -93,7 +93,7 @@ export function ModelPreviewSheet({
   // MTP companions are draft models paired with a real quant at download time,
   // not something to pick on their own.
   const quants = useMemo(
-    () => model?.quants?.filter((q) => !isMtpQuant(q)) ?? [],
+    () => model?.quants?.filter((q) => !isSpecSidecar(q)) ?? [],
     [model]
   )
   const recommended = useRecommendedQuant(model)

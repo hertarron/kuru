@@ -36,12 +36,12 @@ import {
   useCharacters,
   resolveThreadCharacter,
 } from '@/hooks/useCharacters'
+import { deriveToolOutputCap } from '@/lib/context-manager'
 import {
   Conversation,
   ConversationContent,
   ConversationScrollButton,
 } from '@/components/ai-elements/conversation'
-import { invoke } from '@tauri-apps/api/core'
 import { generateId, lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
 import type { UIMessage } from '@ai-sdk/react'
 import { useChatSessions } from '@/stores/chat-session-store'
@@ -98,6 +98,7 @@ import { useToolApproval } from '@/hooks/useToolApproval'
 import { useToolApprovalRequests } from '@/hooks/useToolApprovalRequests'
 import { useToolCallRuntime } from '@/hooks/useToolCallRuntime'
 import { WEB_TOOL_NAMES, executeWebTool } from '@/lib/webSearchTool'
+import { AGENT_TOOL_NAMES, executeAgentTool } from '@/lib/agentTools'
 import { ExtensionTypeEnum, VectorDBExtension } from '@janhq/core'
 import { ExtensionManager } from '@/lib/extension'
 import { Shimmer } from '@/components/ai-elements/shimmer'
@@ -118,6 +119,17 @@ const TITLE_REFRESH_EVERY_N_ASSISTANT_MESSAGES = 4
 function serverForTool(toolName: string): string | undefined {
   return useAppState.getState().tools.find((tool) => tool.name === toolName)
     ?.server
+}
+
+// Internal tools never prompt: RAG and the native web tools are Jan's own, and
+// the built-in agent tools are gated in Rust (execute_tool refuses anything
+// needing approval), so only workspace-confined calls ever reach here.
+function isAutoAllowedTool(toolName: string): boolean {
+  return (
+    useAppState.getState().ragToolNames.has(toolName) ||
+    WEB_TOOL_NAMES.has(toolName) ||
+    AGENT_TOOL_NAMES.has(toolName)
+  )
 }
 
 // Persist the out-of-context error onto the latest user message so the banner
@@ -574,9 +586,7 @@ function ThreadDetail() {
           try {
             const toolName = toolCall.toolName
 
-            // Built-in RAG and native web tools are internal and auto-allowed.
-            const approved = ragToolNames.has(toolName) ||
-              WEB_TOOL_NAMES.has(toolName)
+            const approved = isAutoAllowedTool(toolName)
               ? true
               : await (toolApprovalPromises.current.get(toolCall.toolCallId) ??
                   useToolApprovalRequests
@@ -607,6 +617,22 @@ function ThreadDetail() {
 
             if (WEB_TOOL_NAMES.has(toolName)) {
               result = await executeWebTool(toolName, toolCall.input)
+            } else if (AGENT_TOOL_NAMES.has(toolName)) {
+              const agentResult = await executeAgentTool(
+                toolName,
+                toolCall.input,
+                threadId
+              )
+              // The diff is display-only, so it goes to the runtime store rather
+              // than into `result`: anything in `result` reaches the model, and a
+              // full diff there would duplicate the file it just wrote.
+              const { diff, ...rest } = agentResult
+              if (diff) {
+                useToolCallRuntime
+                  .getState()
+                  .recordDiff(toolCall.toolCallId, diff)
+              }
+              result = rest
             } else if (ragToolNames.has(toolName)) {
               result = await serviceHub.rag().callTool({
                 toolName,
@@ -616,9 +642,18 @@ function ThreadDetail() {
                 scope: projectId ? 'project' : 'thread',
               })
             } else if (mcpToolNames.has(toolName)) {
+              // An MCP result is injected into conversation history verbatim, so
+              // a page-sized one can exhaust the context on its own. Give the
+              // backend a budget scaled to the window this model actually has;
+              // it narrows that against the user's configured ceiling.
+              const ctxLen = useModelProvider.getState().selectedModel?.settings
+                ?.ctx_len?.controller_props?.value
               result = await serviceHub.mcp().callTool({
                 toolName,
                 arguments: toolCall.input,
+                maxOutputChars: deriveToolOutputCap(
+                  typeof ctxLen === 'number' ? ctxLen : undefined
+                ),
               })
             } else {
               result = {
@@ -706,26 +741,9 @@ function ThreadDetail() {
               .join('\n\n') ||
             useThreads.getState().threads[threadId]?.title
           if (inputText) {
-            const provider = useModelProvider.getState().selectedProvider
-            const modelId = useModelProvider.getState().selectedModel?.id
+            // Upstream waits on engine slots here; kuru runs llama-server as a
+            // subprocess, where the router already queues the title request.
             ;(async () => {
-              if (provider === 'llamacpp' && modelId) {
-                let idle = false
-                for (let attempt = 0; attempt < 6; attempt++) {
-                  try {
-                    idle = await invoke<boolean>(
-                      'plugin:llamacpp|router_slots_idle',
-                      { modelId }
-                    )
-                  } catch {
-                    idle = true
-                    break
-                  }
-                  if (idle) break
-                  await new Promise((r) => setTimeout(r, 150))
-                }
-                if (!idle) return
-              }
               titleAbortRef.current?.abort()
               const controller = new AbortController()
               titleAbortRef.current = controller
@@ -751,13 +769,11 @@ function ThreadDetail() {
       // right now so the popup appears immediately instead of waiting for the
       // stream's terminal finish chunk (a stalled stream would otherwise leave
       // the tool at "Running..." with no popup). Execution itself stays in
-      // onFinish so the tool result lands on a completed message. RAG tools are
-      // internal and never prompt.
+      // onFinish so the tool result lands on a completed message. Internal tools
+      // never prompt (see isAutoAllowedTool).
       sessionData.tools.push(toolCall)
-      const ragToolNames = useAppState.getState().ragToolNames
       if (
-        !ragToolNames.has(toolCall.toolName) &&
-        !WEB_TOOL_NAMES.has(toolCall.toolName) &&
+        !isAutoAllowedTool(toolCall.toolName) &&
         !toolApprovalPromises.current.has(toolCall.toolCallId)
       ) {
         toolApprovalPromises.current.set(
@@ -1005,6 +1021,11 @@ function ThreadDetail() {
       toolCallAbortController.current = null
       approvalPromises.clear()
       useToolApprovalRequests.getState().clearPendingForThread(threadId)
+      // Drop per-thread timing/progress/diff state from the shared runtime
+      // store. The cards for the thread we leave are unmounting, so a thread a
+      // later visit cannot show another thread's diff. (code.tsx re-hydrates
+      // its own diffs on mount, so it is unaffected by clearing here.)
+      useToolCallRuntime.getState().reset()
     }
   }, [threadId])
 

@@ -70,9 +70,6 @@ vi.mock('@/i18n/TranslationContext', () => ({
 vi.mock('@/containers/dialogs/AppUpdater', () => ({
   default: () => <div data-testid="app-updater" />,
 }))
-vi.mock('@/containers/dialogs/BackendUpdater', () => ({
-  default: () => <div data-testid="backend-updater" />,
-}))
 vi.mock('@/containers/dialogs/OutOfContextDialog', () => ({
   default: () => <div data-testid="oocp" />,
 }))
@@ -163,7 +160,6 @@ describe('__root route', () => {
     expect(screen.getByTestId('error-dialog')).toBeInTheDocument()
     expect(screen.getByTestId('oocp')).toBeInTheDocument()
     expect(screen.getByTestId('app-updater')).toBeInTheDocument()
-    expect(screen.getByTestId('backend-updater')).toBeInTheDocument()
   })
 
   // Mounted here rather than beside the download popover, which is absent on

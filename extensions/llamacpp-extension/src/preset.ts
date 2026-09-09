@@ -50,11 +50,13 @@ type ModelYaml = ModelConfig & {
   split_mode?: string
 }
 
-// One extra llama-server slot beyond the user-visible "Parallel Sequences"
-// count, reserved for background requests (e.g. thread auto-titling) that
-// must never be able to evict the user's own chat KV cache from its slot.
+// Extra llama-server slots beyond the user-visible "Parallel Sequences" count,
+// reserved for requests that must never evict the user's own chat KV cache
+// from its slot: thread auto-titling (slot 1) and Cowork (slot 2). llama.cpp
+// wraps an out-of-range id_slot back onto slot 0, so a pin without a slot
+// behind it corrupts the chat cache instead of failing.
 // Hidden from the setting's UI value; see reservedSlotId in thread-title-summarizer.ts.
-export const RESERVED_BACKGROUND_SLOTS = 1
+export const RESERVED_BACKGROUND_SLOTS = 2
 
 export const MTP_MIN_BUILD = 9193
 

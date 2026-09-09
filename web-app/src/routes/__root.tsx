@@ -26,7 +26,6 @@ import { LeftSidebar } from '@/components/left-sidebar'
 import { WindowControls } from '@/components/WindowControls'
 import { WindowResizeGrips } from '@/components/WindowResizeGrips'
 import ErrorDialog from '@/containers/dialogs/ErrorDialog'
-import LlamacppBusyOnExitDialog from '@/containers/dialogs/LlamacppBusyOnExitDialog'
 import LlamacppOomListener from '@/containers/dialogs/LlamacppOomListener'
 import AutoCalibration from '@/containers/dialogs/AutoCalibration'
 import MissingDependenciesDialog from '@/containers/dialogs/MissingDependenciesDialog'
@@ -132,7 +131,6 @@ function RootLayout() {
           {/* <TanStackRouterDevtools position="bottom-right" /> */}
           <AttachmentIngestionDialog />
           <ErrorDialog />
-          <LlamacppBusyOnExitDialog />
           <LlamacppOomListener />
           <AutoCalibration />
           <MissingDependenciesDialog />

@@ -5,7 +5,7 @@ import {
   parseFileSize,
 } from '@/lib/modelCompatibility'
 import { selectDefaultQuant } from '@/lib/models'
-import { isMtpQuant } from '@/lib/mtp'
+import { isSpecSidecar } from '@/lib/specDraft'
 import { DEFAULT_MODEL_QUANTIZATIONS } from '@/constants/models'
 import type { CatalogModel, ModelQuant } from '@/services/models/types'
 import type { HardwareData } from '@/hooks/useHardware'
@@ -27,7 +27,7 @@ export function pickBestFitQuant(
   hardware: HardwareData,
   ctxLength: number = DEFAULT_CTX_LENGTH
 ): ModelQuant | undefined {
-  const quants = model.quants?.filter((q) => !isMtpQuant(q)) ?? []
+  const quants = model.quants?.filter((q) => !isSpecSidecar(q)) ?? []
   if (quants.length === 0) return undefined
 
   const fallback = selectDefaultQuant(quants, DEFAULT_MODEL_QUANTIZATIONS)

@@ -14,7 +14,7 @@ import { DEFAULT_MODEL_QUANTIZATIONS } from '@/constants/models'
 import { useRecommendedQuant } from '@/hooks/useRecommendedQuant'
 import { extractDescription, extractModelName } from '@/lib/models'
 import { getModelLogo } from '@/lib/model-developer-logo'
-import { isMtpQuant } from '@/lib/mtp'
+import { isSpecSidecar } from '@/lib/specDraft'
 import { sumMlxModelBytes } from '@/lib/modelCompatibility'
 import { formatBytes, cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n/react-i18next-compat'
@@ -74,7 +74,7 @@ export function ModelCard({
   className?: string
 }) {
   const { t } = useTranslation()
-  const quants = model.quants?.filter((q) => !isMtpQuant(q)) ?? []
+  const quants = model.quants?.filter((q) => !isSpecSidecar(q)) ?? []
   // Matches what the download button will fetch, so the size and the fit badge
   // describe the same file.
   const recommended = useRecommendedQuant(model)

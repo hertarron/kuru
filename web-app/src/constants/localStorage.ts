@@ -15,6 +15,7 @@ export const localStorageKey = {
   settingMemory: 'setting-memory',
   threadMemory: 'thread-memory',
   settingRpText: 'setting-rp-text',
+  settingAgentTools: 'setting-agent-tools',
   settingHardware: 'setting-hardware',
   settingVulkan: 'setting-vulkan',
   toolApproval: 'tool-approval',
@@ -36,6 +37,8 @@ export const localStorageKey = {
   latestJanModel: 'latest-jan-model',
   defaultEmbeddingModel: 'default-embedding-model',
   pausedDownloads: 'paused-downloads',
+  // Value predates the Cowork rename; changing it would orphan saved sessions.
+  coworkSessions: 'code-sessions',
 }
 
 export const CACHE_EXPIRY_MS = 1000 * 60 * 60 * 24

@@ -364,7 +364,7 @@ export function ModelSetting({
 
         <div className="px-4 space-y-8 pb-4 flex-1 min-h-0 overflow-y-auto">
           {provider.provider === 'llamacpp' && (
-            <MtpPanel modelId={model.id} provider={provider} />
+            <SpecDraftPanel modelId={model.id} provider={provider} />
           )}
           {provider.provider === 'llamacpp' && model.embedding !== true && (
             <ChatTemplateKwargs
@@ -611,7 +611,7 @@ export function ModelSetting({
   )
 }
 
-type MtpInfo = {
+type SpecDraftInfo = {
   mtp_layers: number
   mtp: boolean
   spec_draft_n_max?: number
@@ -619,7 +619,7 @@ type MtpInfo = {
   spec_draft_p_min?: number
 }
 
-function MtpPanel({
+export function SpecDraftPanel({
   modelId,
   provider,
 }: {
@@ -628,7 +628,7 @@ function MtpPanel({
 }) {
   const { t } = useTranslation()
   const serviceHub = useServiceHub()
-  const [info, setInfo] = useState<MtpInfo | null>(null)
+  const [info, setInfo] = useState<SpecDraftInfo | null>(null)
 
   useEffect(() => {
     let active = true
@@ -646,6 +646,9 @@ function MtpPanel({
     }
   }, [modelId, serviceHub])
 
+  // kuru still installs whichever llama.cpp build the user picked, so the
+  // panel has to gate on it. Upstream dropped this when the engine became a
+  // compile-time pin.
   const llamacppVersion = provider.settings?.find(
     (s) => s.key === 'llamacpp_version'
   )?.controller_props?.value as string | undefined
@@ -691,14 +694,14 @@ function MtpPanel({
   return (
     <div className="space-y-3">
       <div className="font-medium">
-        {t('common:modelSettings.mtp.section')}
+        {t('common:modelSettings.specDraft.section')}
       </div>
 
       <div className="space-y-2">
         <div className="flex items-start justify-between gap-8">
           <div className="mb-1 truncate">
             <span className="font-medium">
-              {t('common:modelSettings.mtp.enable')}
+              {t('common:modelSettings.specDraft.enable')}
             </span>
           </div>
           <Switch
@@ -712,16 +715,16 @@ function MtpPanel({
         </div>
         <p className="text-muted-foreground leading-normal text-xs">
           {backendSupports
-            ? t('common:modelSettings.mtp.enableDescription')
-            : t('common:modelSettings.mtp.needsUpgrade')}
+            ? t('common:modelSettings.specDraft.enableDescription')
+            : t('common:modelSettings.specDraft.needsUpgrade')}
         </p>
       </div>
 
       {enabled && (
         <>
           <NumberRow
-            label={t('common:modelSettings.mtp.nMax')}
-            description={t('common:modelSettings.mtp.nMaxDescription')}
+            label={t('common:modelSettings.specDraft.nMax')}
+            description={t('common:modelSettings.specDraft.nMaxDescription')}
             placeholder="16"
             value={info.spec_draft_n_max}
             min={1}
@@ -729,8 +732,8 @@ function MtpPanel({
             onChange={(raw) => updateNumber('spec_draft_n_max', raw)}
           />
           <NumberRow
-            label={t('common:modelSettings.mtp.nMin')}
-            description={t('common:modelSettings.mtp.nMinDescription')}
+            label={t('common:modelSettings.specDraft.nMin')}
+            description={t('common:modelSettings.specDraft.nMinDescription')}
             placeholder="0"
             value={info.spec_draft_n_min}
             min={0}
@@ -738,8 +741,8 @@ function MtpPanel({
             onChange={(raw) => updateNumber('spec_draft_n_min', raw)}
           />
           <NumberRow
-            label={t('common:modelSettings.mtp.pMin')}
-            description={t('common:modelSettings.mtp.pMinDescription')}
+            label={t('common:modelSettings.specDraft.pMin')}
+            description={t('common:modelSettings.specDraft.pMinDescription')}
             placeholder="0.75"
             value={info.spec_draft_p_min}
             min={0}

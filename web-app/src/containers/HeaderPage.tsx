@@ -31,6 +31,10 @@ const HeaderPage = memo(function HeaderPage({ children, className, bleed }: Head
   const leftButtons = useTitlebarLayout((s) => s.layout.left.length)
   const linuxControlsPad =
     !IS_MACOS && !open && leftButtons > 0 ? leftButtons * 32 + 24 : undefined
+  // Right-anchored controls (Windows, and Linux DEs that place them there) sit at
+  // right-4 above the header — keep header content clear of them at every width.
+  const rightButtons = useTitlebarLayout((s) => s.layout.right.length)
+  const rightControlsPad = rightButtons > 0 ? rightButtons * 32 + 24 : undefined
 
   return (
     <div
@@ -47,7 +51,10 @@ const HeaderPage = memo(function HeaderPage({ children, className, bleed }: Head
         children === undefined && open && 'h-4',
         className
       )}
-      style={linuxControlsPad ? { paddingLeft: linuxControlsPad } : undefined}
+      style={{
+        ...(linuxControlsPad ? { paddingLeft: linuxControlsPad } : {}),
+        ...(rightControlsPad ? { paddingRight: rightControlsPad } : {}),
+      }}
     >
       <div
         className={cn(

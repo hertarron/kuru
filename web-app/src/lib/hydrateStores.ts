@@ -21,6 +21,8 @@ import { useLorebookSettings } from '@/hooks/useLorebookSettings'
 import { useMemorySettings } from '@/hooks/useMemorySettings'
 import { useThreadMemory } from '@/hooks/useThreadMemory'
 import { useRpTextSettings } from '@/hooks/useRpTextSettings'
+import { useCoworkSessions } from '@/hooks/useCoworkSessions'
+import { useAgentToolsConfig } from '@/hooks/useAgentToolsConfig'
 
 /**
  * Stores persisted through `backendStorage` set `skipHydration: true` so they
@@ -55,6 +57,8 @@ const secondaryStores = [
   useRpTextSettings,
   useMemorySettings,
   useThreadMemory,
+  useCoworkSessions,
+  useAgentToolsConfig,
 ] as const
 
 export async function hydrateBackendStores(): Promise<void> {
