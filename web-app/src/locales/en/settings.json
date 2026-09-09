@@ -368,5 +368,14 @@
     "updateNow": "Update Now",
     "updateSuccess": "Llamacpp updated successfully",
     "updateError": "Failed to update Llamacpp"
-  }
+  },
+  "noBackendUpdateAvailable": "You're running the latest Llamacpp version",
+  "backendUpdateError": "Failed to check for Llamacpp updates",
+  "cudaRuntimeInstalled": "CUDA runtime installed",
+  "checkingForBackendUpdates": "Checking for Llamacpp updates...",
+  "checkForBackendUpdates": "Check for Llamacpp updates",
+  "installingBackend": "Installing Backend...",
+  "installBackendFromFile": "Install Backend from File",
+  "installingCudaRuntime": "Installing CUDA Runtime...",
+  "installCudaRuntime": "Install CUDA Runtime"
 }
