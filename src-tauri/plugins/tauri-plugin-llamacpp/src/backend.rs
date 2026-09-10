@@ -3,82 +3,85 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// ============================================================================
+// Upstream release assets
+// ============================================================================
+
+/// Where the binaries come from. ggml-org publishes a build per commit, several
+/// times a day; janhq's mirror stopped at b9967 on 2026-07-22.
+const RELEASES_API: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases";
+const RELEASE_DOWNLOAD: &str = "https://github.com/ggml-org/llama.cpp/releases/download";
+
+/// A release asset's backend token, split into the parts that decide whether
+/// this machine can run it. The token IS the backend id kuru stores, so
+/// `win-cuda-12.4-x64` names both the asset and the install directory.
+///
+/// Shapes, all `{os}[-{family}[-{variant}]]-{arch}`:
+///   win-cpu-x64, win-cuda-12.4-x64, win-vulkan-x64, win-rocm-10.0-x64,
+///   ubuntu-x64, ubuntu-vulkan-arm64, ubuntu-sycl-fp16-x64, macos-arm64
+#[derive(Debug, PartialEq)]
+pub struct BackendToken {
+    pub os: String,
+    pub arch: String,
+    /// cpu, cuda, vulkan, rocm, sycl, opencl, openvino
+    pub family: String,
+    /// CUDA major, for picking the matching cudart redistributable.
+    pub cuda_major: Option<u32>,
+}
+
+/// Families kuru will install. Everything else upstream publishes (sycl,
+/// openvino, opencl, s390x) is left alone rather than half-supported.
+const KNOWN_FAMILIES: [&str; 4] = ["cuda", "vulkan", "rocm", "cpu"];
+
+pub fn parse_backend_token(token: &str) -> Option<BackendToken> {
+    let parts: Vec<&str> = token.split('-').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let os = parts[0].to_string();
+    let arch = parts[parts.len() - 1].to_string();
+    let middle = &parts[1..parts.len() - 1];
+
+    // `ubuntu-x64` and `macos-arm64` carry no family segment and are CPU builds
+    // (macOS ships Metal inside the same archive).
+    let family = middle.first().copied().unwrap_or("cpu").to_string();
+    if !KNOWN_FAMILIES.contains(&family.as_str()) {
+        return None;
+    }
+
+    let cuda_major = if family == "cuda" {
+        middle
+            .get(1)
+            .and_then(|v| v.split('.').next())
+            .and_then(|maj| maj.parse::<u32>().ok())
+    } else {
+        None
+    };
+
+    Some(BackendToken {
+        os,
+        arch,
+        family,
+        cuda_major,
+    })
+}
+
+/// The key `determine_supported_backends` emits and the asset filter matches
+/// on. Deliberately not the full token: upstream moves the CUDA minor
+/// (12.4 -> 12.6) and the ROCm version between releases, and pinning those
+/// here is what makes a version list go stale. The CUDA *major* does belong in
+/// the key -- a driver new enough for 12 need not be new enough for 13.
+fn capability_key(os: &str, arch: &str, family: &str, cuda_major: Option<u32>) -> String {
+    match cuda_major {
+        Some(major) => format!("{}-{}/{}{}", os, arch, family, major),
+        None => format!("{}-{}/{}", os, arch, family),
+    }
+}
+
+/// Kept as the identity because kuru has no released installs to migrate.
+/// It stays a command so the extension's call sites do not need to branch.
 #[tauri::command]
 pub fn map_old_backend_to_new(old_backend: String) -> String {
-    let is_windows = old_backend.starts_with("win-");
-    // Official llama.cpp Linux assets use the `ubuntu-` prefix (e.g.
-    // `ubuntu-rocm-7.2-x64`); normalize them onto Jan's `linux-` scheme.
-    let is_linux = old_backend.starts_with("linux-") || old_backend.starts_with("ubuntu-");
-    let os_prefix = if is_windows {
-        "win-"
-    } else if is_linux {
-        "linux-"
-    } else {
-        ""
-    };
-
-    // Determine architecture suffix, defaulting to x64
-    let arch_suffix = if old_backend.contains("-arm64") {
-        "arm64"
-    } else {
-        "x64"
-    };
-    let is_x64 = arch_suffix == "x64";
-
-    // Handle GPU backends
-    if old_backend.contains("cuda-cu12.0") {
-        // Migration from e.g., 'linux-avx2-cuda-cu12.0-x64' to 'linux-cuda-12-common_cpus-x64'
-        return format!(
-            "{}cuda-12-common_cpus-{}",
-            os_prefix,
-            if is_x64 { "x64" } else { arch_suffix }
-        );
-    } else if old_backend.contains("cuda-cu11.7") {
-        // Migration from e.g., 'win-noavx-cuda-cu11.7-x64' to 'win-cuda-11-common_cpus-x64'
-        return format!(
-            "{}cuda-11-common_cpus-{}",
-            os_prefix,
-            if is_x64 { "x64" } else { arch_suffix }
-        );
-    } else if old_backend.contains("vulkan") {
-        // If it's already the new name, return it
-        if old_backend.contains("vulkan-common_cpus") {
-            return old_backend;
-        }
-
-        // Migration from e.g., 'linux-vulkan-x64' to 'linux-vulkan-common_cpus-x64'
-        return format!(
-            "{}vulkan-common_cpus-{}",
-            os_prefix,
-            if is_x64 { "x64" } else { arch_suffix }
-        );
-    } else if old_backend.contains("hip") || old_backend.contains("rocm") {
-        // Canonicalize every HIP variant — Jan's own `*-hip-common_cpus-x64`
-        // and the official `ubuntu-rocm-*` / `win-hip-*` names — onto one id so
-        // listing, update checks and migration treat them as a single backend.
-        return format!(
-            "{}hip-common_cpus-{}",
-            os_prefix,
-            if is_x64 { "x64" } else { arch_suffix }
-        );
-    }
-
-    // Handle CPU-only backends (avx, avx2, avx512, noavx)
-    let is_old_cpu_backend = old_backend.contains("avx512")
-        || old_backend.contains("avx2")
-        || old_backend.contains("avx-x64") // Check for 'avx' but not as part of 'avx2' or 'avx512'
-        || old_backend.contains("noavx-x64");
-
-    if is_old_cpu_backend {
-        // Migration from e.g., 'win-avx512-x64' to 'win-common_cpus-x64'
-        return format!(
-            "{}common_cpus-{}",
-            os_prefix,
-            if is_x64 { "x64" } else { arch_suffix }
-        );
-    }
-
-    // Return original if it doesn't match a pattern that needs migration
     old_backend
 }
 
@@ -186,7 +189,6 @@ pub struct BackendInfo {
 
 #[derive(Deserialize)]
 pub struct SystemFeatures {
-    cuda11: bool,
     cuda12: bool,
     cuda13: bool,
     vulkan: bool,
@@ -207,65 +209,36 @@ pub fn determine_supported_backends(
     arch: String,
     features: SystemFeatures,
 ) -> Result<Vec<String>, String> {
-    let sys_type = format!("{}-{}", os_type, arch);
-    let mut supported_backends: Vec<String> = Vec::new();
+    // Upstream's own names for the platform half of an asset token.
+    let (os, upstream_arch) = match (os_type.as_str(), arch.as_str()) {
+        ("windows", "x86_64") | ("windows", "x86") => ("win", "x64"),
+        ("windows", "aarch64") | ("windows", "arm64") => ("win", "arm64"),
+        ("linux", "x86_64") | ("linux", "x86") => ("ubuntu", "x64"),
+        ("linux", "aarch64") | ("linux", "arm64") => ("ubuntu", "arm64"),
+        ("macos", "x86_64") | ("macos", "x86") => ("macos", "x64"),
+        ("macos", "aarch64") | ("macos", "arm64") => ("macos", "arm64"),
+        _ => return Err(format!("Unsupported system type: {}-{}", os_type, arch)),
+    };
 
-    // Determine supported backends based on system type and features
-    match sys_type.as_str() {
-        "windows-x86_64" => {
-            supported_backends.push("win-common_cpus-x64".to_string());
-            if features.cuda11 {
-                supported_backends.push("win-cuda-11-common_cpus-x64".to_string());
-            }
-            if features.cuda12 {
-                supported_backends.push("win-cuda-12-common_cpus-x64".to_string());
-            }
-            if features.cuda13 {
-                supported_backends.push("win-cuda-13-common_cpus-x64".to_string());
-            }
-            if features.vulkan {
-                supported_backends.push("win-vulkan-common_cpus-x64".to_string());
-            }
-            if features.hip {
-                supported_backends.push("win-hip-common_cpus-x64".to_string());
-            }
+    let mut keys = vec![capability_key(os, upstream_arch, "cpu", None)];
+
+    // macOS gets Metal inside the CPU archive and has no separate GPU build.
+    if os != "macos" {
+        if features.cuda12 {
+            keys.push(capability_key(os, upstream_arch, "cuda", Some(12)));
         }
-        "windows-aarch64" | "windows-arm64" => {
-            supported_backends.push("win-arm64".to_string());
+        if features.cuda13 {
+            keys.push(capability_key(os, upstream_arch, "cuda", Some(13)));
         }
-        "linux-x86_64" | "linux-x86" => {
-            supported_backends.push("linux-common_cpus-x64".to_string());
-            if features.cuda11 {
-                supported_backends.push("linux-cuda-11-common_cpus-x64".to_string());
-            }
-            if features.cuda12 {
-                supported_backends.push("linux-cuda-12-common_cpus-x64".to_string());
-            }
-            if features.cuda13 {
-                supported_backends.push("linux-cuda-13-common_cpus-x64".to_string());
-            }
-            if features.vulkan {
-                supported_backends.push("linux-vulkan-common_cpus-x64".to_string());
-            }
-            if features.hip {
-                supported_backends.push("linux-hip-common_cpus-x64".to_string());
-            }
+        if features.vulkan {
+            keys.push(capability_key(os, upstream_arch, "vulkan", None));
         }
-        "linux-aarch64" | "linux-arm64" => {
-            supported_backends.push("linux-arm64".to_string());
-        }
-        "macos-x86_64" | "macos-x86" => {
-            supported_backends.push("macos-x64".to_string());
-        }
-        "macos-aarch64" | "macos-arm64" => {
-            supported_backends.push("macos-arm64".to_string());
-        }
-        _ => {
-            return Err(format!("Unsupported system type: {}", sys_type));
+        if features.hip {
+            keys.push(capability_key(os, upstream_arch, "rocm", None));
         }
     }
 
-    Ok(supported_backends)
+    Ok(keys)
 }
 
 #[tauri::command]
@@ -307,7 +280,6 @@ pub struct SupportedFeatures {
     avx: bool,
     avx2: bool,
     avx512: bool,
-    cuda11: bool,
     cuda12: bool,
     cuda13: bool,
     vulkan: bool,
@@ -345,7 +317,6 @@ pub fn get_supported_features(
         avx: cpu_extensions.contains(&"avx".to_string()),
         avx2: cpu_extensions.contains(&"avx2".to_string()),
         avx512: cpu_extensions.contains(&"avx512".to_string()),
-        cuda11: false,
         cuda12: false,
         cuda13: false,
         vulkan: false,
@@ -353,9 +324,9 @@ pub fn get_supported_features(
     };
 
     // https://docs.nvidia.com/deploy/cuda-compatibility/#cuda-11-and-later-defaults-to-minor-version-compatibility
-    let (min_cuda11_driver, min_cuda12_driver, min_cuda13_driver) = match os_type.as_str() {
-        "linux" => ("450.80.02", "525.60.13", "580"),
-        "windows" => ("452.39", "527.41", "580"),
+    let (min_cuda12_driver, min_cuda13_driver) = match os_type.as_str() {
+        "linux" => ("525.60.13", "580"),
+        "windows" => ("527.41", "580"),
         _ => return Ok(features), // Other OS types support neither CUDA nor HIP
     };
 
@@ -371,9 +342,6 @@ pub fn get_supported_features(
 
         // Check CUDA support
         if gpu_info.nvidia_info.is_some() {
-            if compare_versions(driver_version, min_cuda11_driver) >= 0 {
-                features.cuda11 = true;
-            }
             if compare_versions(driver_version, min_cuda12_driver) >= 0 {
                 features.cuda12 = true;
             }
@@ -609,50 +577,16 @@ pub async fn prioritize_backends(
     })
 }
 
+/// Groups an install with the other builds of the same hardware family, so an
+/// update check follows `win-cuda-12.4-x64` to `win-cuda-12.6-x64` when
+/// upstream moves the minor. CUDA keeps its major because 12 and 13 need
+/// different drivers and different cudart.
 fn get_backend_category(backend_string: &str) -> Option<String> {
-    if backend_string.contains("cuda-13-common_cpus") {
-        return Some("cuda-cu13.0".to_string());
-    }
-    if backend_string.contains("cuda-12-common_cpus") || backend_string.contains("cu12.0") {
-        return Some("cuda-cu12.0".to_string());
-    }
-    if backend_string.contains("cuda-11-common_cpus") || backend_string.contains("cu11.7") {
-        return Some("cuda-cu11.7".to_string());
-    }
-    // HIP must precede the common_cpus/x64 checks: both Jan's own
-    // `*-hip-common_cpus-x64` and the official `ubuntu-rocm-*`/`win-hip-*` names
-    // would otherwise fall through to a CPU category.
-    if backend_string.contains("hip") || backend_string.contains("rocm") {
-        return Some("hip".to_string());
-    }
-    if backend_string.contains("vulkan") {
-        return Some("vulkan".to_string());
-    }
-    if backend_string.contains("common_cpus") {
-        return Some("common_cpus".to_string());
-    }
-    if backend_string.contains("avx512") {
-        return Some("avx512".to_string());
-    }
-    if backend_string.contains("avx2") {
-        return Some("avx2".to_string());
-    }
-    if backend_string.contains("avx")
-        && !backend_string.contains("avx2")
-        && !backend_string.contains("avx512")
-    {
-        return Some("avx".to_string());
-    }
-    if backend_string.contains("noavx") {
-        return Some("noavx".to_string());
-    }
-    if backend_string.ends_with("arm64") {
-        return Some("arm64".to_string());
-    }
-    if backend_string.ends_with("x64") {
-        return Some("x64".to_string());
-    }
-    None
+    let token = parse_backend_token(backend_string)?;
+    Some(match (token.family.as_str(), token.cuda_major) {
+        ("cuda", Some(major)) => format!("cuda-{}", major),
+        (family, _) => family.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -1140,53 +1074,49 @@ pub async fn fetch_remote_supported_backends(
 ) -> Result<Vec<BackendInfo>, String> {
     let client = build_http_client(proxy.as_ref())?;
 
-    let releases: Vec<GithubRelease> = {
-        let primary = client
-            .get("https://api.github.com/repos/janhq/llama.cpp/releases")
-            .send()
-            .await;
+    let resp = client
+        .get(RELEASES_API)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach the llama.cpp releases API: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "llama.cpp releases API returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let releases: Vec<GithubRelease> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse GitHub releases JSON: {}", e))?;
 
-        match primary {
-            Ok(resp) if resp.status().is_success() => resp
-                .json::<Vec<GithubRelease>>()
-                .await
-                .map_err(|e| format!("Failed to parse GitHub releases JSON: {}", e))?,
-            _ => {
-                // Fallback to catalog mirror
-                let fallback = client
-                    .get("https://catalog.jan.ai/llama.cpp/releases/releases.json")
-                    .send()
-                    .await
-                    .map_err(|e| format!("Both GitHub and fallback requests failed: {}", e))?;
-
-                fallback
-                    .json::<Vec<GithubRelease>>()
-                    .await
-                    .map_err(|e| format!("Failed to parse fallback releases JSON: {}", e))?
-            }
-        }
-    };
-
-    // Take the first 10 (already sorted descending by tag_name from GitHub)
-    let mut result: Vec<BackendInfo> = Vec::new();
+    // Build numbers are `b<n>`, so a lexical sort puts b982 above b9100.
     let mut sorted_releases = releases;
-    sorted_releases.sort_by(|a, b| b.tag_name.cmp(&a.tag_name));
+    sorted_releases.sort_by_key(|r| std::cmp::Reverse(parse_backend_version(r.tag_name.clone())));
 
+    let mut result: Vec<BackendInfo> = Vec::new();
     for release in sorted_releases.into_iter().take(10) {
         let version = &release.tag_name;
+        let prefix = format!("llama-{}-bin-", version);
         for asset in &release.assets {
-            // Expected format: llama-{version}-bin-{backend}.tar.gz
-            let prefix = format!("llama-{}-bin-", version);
-            let suffix = ".tar.gz";
-            if asset.name.starts_with(&prefix) && asset.name.ends_with(suffix) {
-                let backend = asset.name[prefix.len()..asset.name.len() - suffix.len()].to_string();
-                let mapped = map_old_backend_to_new(backend.clone());
-                if supported_backends.contains(&backend) || supported_backends.contains(&mapped) {
-                    result.push(BackendInfo {
-                        version: version.clone(),
-                        backend,
-                    });
-                }
+            let Some(rest) = asset.name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(token) = rest
+                .strip_suffix(".zip")
+                .or_else(|| rest.strip_suffix(".tar.gz"))
+            else {
+                continue;
+            };
+            let Some(parsed) = parse_backend_token(token) else {
+                continue;
+            };
+            let key = capability_key(&parsed.os, &parsed.arch, &parsed.family, parsed.cuda_major);
+            if supported_backends.contains(&key) {
+                result.push(BackendInfo {
+                    version: version.clone(),
+                    backend: token.to_string(),
+                });
             }
         }
     }
@@ -1208,14 +1138,15 @@ pub struct BackendDownloadItem {
 /// Internal helper: check if a CUDA runtime library is present at the new
 /// location (`backend_dir/build/bin/{libname}`) without performing any
 /// migration side-effects.
-fn check_cuda_installed_internal(backend_dir: &str, cuda_version: &str, os_type: &str) -> bool {
-    let libname: &str = match (os_type, cuda_version) {
-        ("windows", "11.7") => "cudart64_110.dll",
-        ("windows", "12.0") => "cudart64_12.dll",
-        ("windows", "13.0") => "cudart64_13.dll",
-        ("linux", "11.7") => "libcudart.so.11.0",
-        ("linux", "12.0") => "libcudart.so.12",
-        ("linux", "13.0") => "libcudart.so.13",
+/// Whether the cudart redistributable is already unpacked next to the server
+/// binary. Upstream archives are flat, so the DLLs land in `build/bin/`
+/// alongside `llama-server.exe` once the layout is normalized.
+fn check_cuda_installed_internal(backend_dir: &str, cuda_major: u32, os_type: &str) -> bool {
+    let libname: &str = match (os_type, cuda_major) {
+        ("windows", 12) => "cudart64_12.dll",
+        ("windows", 13) => "cudart64_13.dll",
+        ("linux", 12) => "libcudart.so.12",
+        ("linux", 13) => "libcudart.so.13",
         _ => return false,
     };
 
@@ -1234,99 +1165,35 @@ pub fn build_backend_download_items(
     jan_data_folder: String,
     os_type: String,
 ) -> Result<Vec<BackendDownloadItem>, String> {
-    let backend_dir = get_backend_dir(backend.clone(), version.clone(), jan_data_folder.clone());
+    let _ = source;
+    let token = parse_backend_token(&backend)
+        .ok_or_else(|| format!("Unrecognised backend id: {}", backend))?;
+
+    let backend_dir = get_backend_dir(backend.clone(), version.clone(), jan_data_folder);
     let task_id = format!("llamacpp-{}-{}", version, backend).replace('.', "-");
-    let platform_name = if os_type == "windows" { "win" } else { "linux" };
 
-    // Official Windows HIP assets ship as .zip (e.g. win-hip-radeon-x64.zip);
-    // Jan's own win-hip-common_cpus-x64 and all other backends are .tar.gz.
-    let archive_ext = if os_type == "windows"
-        && backend.contains("hip")
-        && !backend.contains("common_cpus")
-    {
-        "zip"
-    } else {
-        "tar.gz"
-    };
-
-    // Base URL for the main backend archive
-    let backend_url = match source.as_str() {
-        "github" => format!(
-            "https://github.com/janhq/llama.cpp/releases/download/{}/llama-{}-bin-{}.{}",
-            version, version, backend, archive_ext
-        ),
-        _ => format!(
-            "https://catalog.jan.ai/llama.cpp/releases/{}/llama-{}-bin-{}.{}",
-            version, version, backend, archive_ext
-        ),
-    };
-
-    let save_path = format!("{}/backend.{}", backend_dir, archive_ext);
+    // Upstream ships Windows as .zip and everything else as .tar.gz.
+    let archive_ext = if token.os == "win" { "zip" } else { "tar.gz" };
 
     let mut items = vec![BackendDownloadItem {
-        url: backend_url,
-        save_path,
+        url: format!(
+            "{}/{}/llama-{}-bin-{}.{}",
+            RELEASE_DOWNLOAD, version, version, backend, archive_ext
+        ),
+        save_path: format!("{}/backend.{}", backend_dir, archive_ext),
         model_id: task_id.clone(),
     }];
 
-    // CUDA runtime items
-    if backend.contains("cu11.7") || backend.contains("cuda-11") {
-        let already_installed =
-            check_cuda_installed_internal(&backend_dir, "11.7", &os_type);
-        if !already_installed {
-            let cuda_url = match source.as_str() {
-                "github" => format!(
-                    "https://github.com/janhq/llama.cpp/releases/download/{}/cudart-llama-bin-{}-cu11.7-x64.tar.gz",
-                    version, platform_name
-                ),
-                _ => format!(
-                    "https://catalog.jan.ai/llama.cpp/releases/{}/cudart-llama-bin-{}-cu11.7-x64.tar.gz",
-                    version, platform_name
-                ),
-            };
+    // CUDA builds link against the redistributable dynamically, published as a
+    // sibling asset named for the same token.
+    if let Some(major) = token.cuda_major {
+        if !check_cuda_installed_internal(&backend_dir, major, &os_type) {
             items.push(BackendDownloadItem {
-                url: cuda_url,
-                save_path: format!("{}/build/bin/cuda11.tar.gz", backend_dir),
-                model_id: task_id.clone(),
-            });
-        }
-    } else if backend.contains("cu12.0") || backend.contains("cuda-12") {
-        let already_installed =
-            check_cuda_installed_internal(&backend_dir, "12.0", &os_type);
-        if !already_installed {
-            let cuda_url = match source.as_str() {
-                "github" => format!(
-                    "https://github.com/janhq/llama.cpp/releases/download/{}/cudart-llama-bin-{}-cu12.0-x64.tar.gz",
-                    version, platform_name
+                url: format!(
+                    "{}/{}/cudart-llama-bin-{}.zip",
+                    RELEASE_DOWNLOAD, version, backend
                 ),
-                _ => format!(
-                    "https://catalog.jan.ai/llama.cpp/releases/{}/cudart-llama-bin-{}-cu12.0-x64.tar.gz",
-                    version, platform_name
-                ),
-            };
-            items.push(BackendDownloadItem {
-                url: cuda_url,
-                save_path: format!("{}/build/bin/cuda12.tar.gz", backend_dir),
-                model_id: task_id.clone(),
-            });
-        }
-    } else if backend.contains("cuda-13") {
-        let already_installed =
-            check_cuda_installed_internal(&backend_dir, "13.0", &os_type);
-        if !already_installed {
-            let cuda_url = match source.as_str() {
-                "github" => format!(
-                    "https://github.com/janhq/llama.cpp/releases/download/{}/cudart-llama-bin-{}-cu13.0-x64.tar.gz",
-                    version, platform_name
-                ),
-                _ => format!(
-                    "https://catalog.jan.ai/llama.cpp/releases/{}/cudart-llama-bin-{}-cu13.0-x64.tar.gz",
-                    version, platform_name
-                ),
-            };
-            items.push(BackendDownloadItem {
-                url: cuda_url,
-                save_path: format!("{}/build/bin/cuda13.tar.gz", backend_dir),
+                save_path: format!("{}/build/bin/cudart.zip", backend_dir),
                 model_id: task_id.clone(),
             });
         }
@@ -1563,91 +1430,15 @@ mod tests {
         assert!(verify_file_sha512(p, "zz12zz".into()).await.unwrap());
     }
 
-    // --- Tests for map_old_backend_to_new ---
-
-    #[test]
-    fn test_map_old_backend_to_new_cuda() {
-        // Linux CUDA 12
-        assert_eq!(
-            map_old_backend_to_new("linux-avx2-cuda-cu12.0-x64".to_string()),
-            "linux-cuda-12-common_cpus-x64"
-        );
-        // Windows CUDA 11 (noavx)
-        assert_eq!(
-            map_old_backend_to_new("win-noavx-cuda-cu11.7-x64".to_string()),
-            "win-cuda-11-common_cpus-x64"
-        );
-    }
-
-    #[test]
-    fn test_map_old_backend_to_new_vulkan() {
-        // Linux Vulkan
-        assert_eq!(
-            map_old_backend_to_new("linux-vulkan-x64".to_string()),
-            "linux-vulkan-common_cpus-x64"
-        );
-        // Already new format
-        assert_eq!(
-            map_old_backend_to_new("win-vulkan-common_cpus-x64".to_string()),
-            "win-vulkan-common_cpus-x64"
-        );
-    }
-
-    #[test]
-    fn test_map_old_backend_to_new_cpu() {
-        // AVX512 migration
-        assert_eq!(
-            map_old_backend_to_new("win-avx512-x64".to_string()),
-            "win-common_cpus-x64"
-        );
-        // AVX2 migration
-        assert_eq!(
-            map_old_backend_to_new("linux-avx2-x64".to_string()),
-            "linux-common_cpus-x64"
-        );
-    }
-
-    #[test]
-    fn test_map_old_backend_to_new_hip() {
-        // Official Linux ROCm asset → canonical Jan id
-        assert_eq!(
-            map_old_backend_to_new("ubuntu-rocm-7.2-x64".to_string()),
-            "linux-hip-common_cpus-x64"
-        );
-        // Official Windows HIP asset → canonical Jan id
-        assert_eq!(
-            map_old_backend_to_new("win-hip-radeon-x64".to_string()),
-            "win-hip-common_cpus-x64"
-        );
-        // Jan's own format is already canonical (idempotent)
-        assert_eq!(
-            map_old_backend_to_new("linux-hip-common_cpus-x64".to_string()),
-            "linux-hip-common_cpus-x64"
-        );
-    }
-
     #[test]
     fn test_get_backend_category_hip() {
         assert_eq!(
-            get_backend_category("linux-hip-common_cpus-x64").as_deref(),
-            Some("hip")
+            get_backend_category("win-rocm-10.0-x64").as_deref(),
+            Some("rocm")
         );
         assert_eq!(
-            get_backend_category("ubuntu-rocm-7.2-x64").as_deref(),
-            Some("hip")
-        );
-        assert_eq!(
-            get_backend_category("win-hip-radeon-x64").as_deref(),
-            Some("hip")
-        );
-    }
-
-    #[test]
-    fn test_map_old_backend_to_new_arch() {
-        // ARM64 detection
-        assert_eq!(
-            map_old_backend_to_new("linux-arm64".to_string()),
-            "linux-arm64" // Does not match specific migration patterns, returns original
+            get_backend_category("ubuntu-rocm-10.0-x64").as_deref(),
+            Some("rocm")
         );
     }
 
@@ -1676,7 +1467,6 @@ mod tests {
         assert!(result.avx);
         assert!(result.avx2);
         assert!(!result.avx512);
-        assert!(!result.cuda11);
         assert!(!result.vulkan);
     }
 
@@ -1694,7 +1484,6 @@ mod tests {
 
         let result = get_supported_features("linux".to_string(), vec![], gpus).unwrap();
 
-        assert!(result.cuda11); // 530 > 450
         assert!(result.cuda12); // 530 > 525
         assert!(!result.cuda13); // 530 < 580
         assert!(!result.hip); // NVIDIA GPU, no HIP
@@ -1714,7 +1503,6 @@ mod tests {
         let result = get_supported_features("windows".to_string(), vec![], gpus).unwrap();
 
         assert!(result.vulkan);
-        assert!(!result.cuda11);
         assert!(!result.hip); // Intel GPU, no HIP
     }
 
@@ -1733,7 +1521,6 @@ mod tests {
         let linux = get_supported_features("linux".to_string(), vec![], gpus).unwrap();
         assert!(linux.hip);
         assert!(linux.vulkan);
-        assert!(!linux.cuda11);
 
         // macOS never offers HIP even with an AMD GPU.
         let mac_gpus = vec![GpuInfo {
@@ -1751,7 +1538,6 @@ mod tests {
     #[test]
     fn test_determine_supported_backends_windows_all() {
         let features = SystemFeatures {
-            cuda11: true,
             cuda12: true,
             cuda13: false,
             vulkan: true,
@@ -1762,18 +1548,19 @@ mod tests {
             determine_supported_backends("windows".to_string(), "x86_64".to_string(), features)
                 .unwrap();
 
-        assert!(result.contains(&"win-common_cpus-x64".to_string()));
-        assert!(result.contains(&"win-cuda-11-common_cpus-x64".to_string()));
-        assert!(result.contains(&"win-cuda-12-common_cpus-x64".to_string()));
-        assert!(result.contains(&"win-vulkan-common_cpus-x64".to_string()));
-        assert!(result.contains(&"win-hip-common_cpus-x64".to_string()));
-        assert!(!result.contains(&"win-cuda-13-common_cpus-x64".to_string()));
+        // Capability keys, not asset names: upstream moves the CUDA minor and
+        // the ROCm version between releases, so only the family is pinned here.
+        assert!(result.contains(&"win-x64/cpu".to_string()));
+        assert!(result.contains(&"win-x64/cuda12".to_string()));
+        // The driver is too old for CUDA 13, so that build is not offered.
+        assert!(!result.contains(&"win-x64/cuda13".to_string()));
+        assert!(result.contains(&"win-x64/vulkan".to_string()));
+        assert!(result.contains(&"win-x64/rocm".to_string()));
     }
 
     #[test]
     fn test_determine_supported_backends_mac_arm() {
         let features = SystemFeatures {
-            cuda11: false,
             cuda12: false,
             cuda13: false,
             vulkan: false,
@@ -1784,8 +1571,10 @@ mod tests {
             determine_supported_backends("macos".to_string(), "arm64".to_string(), features)
                 .unwrap();
 
+        // macOS ships Metal inside the CPU archive; there is no separate GPU
+        // build to offer.
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], "macos-arm64");
+        assert_eq!(result[0], "macos-arm64/cpu");
     }
 
     // --- Tests for list_supported_backends ---
@@ -2052,18 +1841,6 @@ mod tests {
     // --- Tests for should_migrate_backend ---
 
     #[test]
-    fn test_should_migrate_backend_needs_migration() {
-        let old_backend = "linux-avx2-x64".to_string();
-        let available = vec![BackendInfo {
-            version: "b7524".into(),
-            backend: "linux-common_cpus-x64".into(),
-        }];
-
-        let result = should_migrate_backend(old_backend, available).unwrap();
-        assert_eq!(result, Some("linux-common_cpus-x64".to_string()));
-    }
-
-    #[test]
     fn test_should_migrate_backend_no_migration_needed() {
         let new_backend = "linux-common_cpus-x64".to_string();
         let available = vec![BackendInfo {
@@ -2309,8 +2086,8 @@ mod tests {
         let jan_data = temp_dir.path().to_string_lossy().to_string();
 
         let items = build_backend_download_items(
-            "linux-common_cpus-x64".to_string(),
-            "b7523".to_string(),
+            "ubuntu-x64".to_string(),
+            "b10883".to_string(),
             "github".to_string(),
             jan_data,
             "linux".to_string(),
@@ -2318,78 +2095,105 @@ mod tests {
         .unwrap();
 
         assert_eq!(items.len(), 1);
-        assert!(items[0].url.contains("linux-common_cpus-x64"));
-        assert!(items[0].url.contains("github.com"));
+        assert!(items[0].url.contains("ggml-org/llama.cpp"));
+        assert!(items[0].url.ends_with("llama-b10883-bin-ubuntu-x64.tar.gz"));
     }
 
     #[test]
-    fn test_build_backend_download_items_cuda12_returns_two_items() {
+    fn test_build_backend_download_items_cuda_adds_the_matching_cudart() {
         let temp_dir = tempfile::tempdir().unwrap();
         let jan_data = temp_dir.path().to_string_lossy().to_string();
 
         let items = build_backend_download_items(
-            "linux-cuda-12-common_cpus-x64".to_string(),
-            "b7523".to_string(),
+            "win-cuda-12.4-x64".to_string(),
+            "b10883".to_string(),
+            "github".to_string(),
+            jan_data,
+            "windows".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert!(items[0]
+            .url
+            .ends_with("/b10883/llama-b10883-bin-win-cuda-12.4-x64.zip"));
+        // The redistributable is named for the same token as the backend, so
+        // a CUDA minor bump upstream needs no change here.
+        assert!(items[1]
+            .url
+            .ends_with("/b10883/cudart-llama-bin-win-cuda-12.4-x64.zip"));
+        // All items must share the same model_id for unified progress tracking
+        assert_eq!(items[0].model_id, items[1].model_id);
+    }
+
+    #[test]
+    fn test_build_backend_download_items_linux_uses_tar_gz() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let jan_data = temp_dir.path().to_string_lossy().to_string();
+
+        let items = build_backend_download_items(
+            "ubuntu-vulkan-x64".to_string(),
+            "b10883".to_string(),
             "github".to_string(),
             jan_data,
             "linux".to_string(),
         )
         .unwrap();
 
-        assert_eq!(items.len(), 2);
-        assert!(items[1].url.contains("cu12.0"));
-        assert!(items[1].save_path.ends_with("cuda12.tar.gz"));
-        // All items must share the same model_id for unified progress tracking
-        assert_eq!(items[0].model_id, items[1].model_id);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].url.ends_with(".tar.gz"));
+        assert!(items[0].save_path.ends_with("backend.tar.gz"));
     }
 
     #[test]
-    fn test_build_backend_download_items_cu11_returns_two_items() {
+    fn test_build_backend_download_items_rejects_an_unknown_token() {
         let temp_dir = tempfile::tempdir().unwrap();
         let jan_data = temp_dir.path().to_string_lossy().to_string();
 
-        let items = build_backend_download_items(
-            "linux-cu11.7-common_cpus-x64".to_string(),
-            "b7523".to_string(),
-            "cdn".to_string(),
-            jan_data,
-            "linux".to_string(),
-        )
-        .unwrap();
-
-        assert_eq!(items.len(), 2);
-        assert!(items[1].url.contains("cu11.7"));
-        assert!(items[1].save_path.ends_with("cuda11.tar.gz"));
-        // All items must share the same model_id for unified progress tracking
-        assert_eq!(items[0].model_id, items[1].model_id);
-    }
-
-    #[test]
-    fn test_build_backend_download_items_github_vs_cdn_urls() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let jan_data = temp_dir.path().to_string_lossy().to_string();
-
-        let github_items = build_backend_download_items(
-            "linux-common_cpus-x64".to_string(),
-            "b7523".to_string(),
+        assert!(build_backend_download_items(
+            "win-avx2-cuda-cu12.0-x64".to_string(),
+            "b9967".to_string(),
             "github".to_string(),
-            jan_data.clone(),
-            "linux".to_string(),
-        )
-        .unwrap();
-
-        let cdn_items = build_backend_download_items(
-            "linux-common_cpus-x64".to_string(),
-            "b7523".to_string(),
-            "cdn".to_string(),
             jan_data,
-            "linux".to_string(),
+            "windows".to_string(),
         )
-        .unwrap();
+        .is_err());
+    }
 
-        assert!(github_items[0].url.contains("github.com"));
-        assert!(cdn_items[0].url.contains("catalog.jan.ai"));
-        assert_ne!(github_items[0].url, cdn_items[0].url);
+    // A release carries assets kuru has no business installing (sycl, openvino,
+    // opencl, s390x). They must not reach the version list as bare tokens.
+    #[test]
+    fn test_parse_backend_token_families() {
+        let cuda = parse_backend_token("win-cuda-12.4-x64").unwrap();
+        assert_eq!(cuda.os, "win");
+        assert_eq!(cuda.arch, "x64");
+        assert_eq!(cuda.family, "cuda");
+        assert_eq!(cuda.cuda_major, Some(12));
+
+        // No family segment: `ubuntu-x64` and `macos-arm64` are CPU builds.
+        assert_eq!(parse_backend_token("ubuntu-x64").unwrap().family, "cpu");
+        assert_eq!(parse_backend_token("macos-arm64").unwrap().family, "cpu");
+        assert_eq!(parse_backend_token("win-rocm-10.0-x64").unwrap().family, "rocm");
+
+        assert!(parse_backend_token("ubuntu-sycl-fp16-x64").is_none());
+        assert!(parse_backend_token("win-openvino-2026.3.1-x64").is_none());
+        assert!(parse_backend_token("win-opencl-adreno-arm64").is_none());
+    }
+
+    // The whole point of keying on family rather than the full token: upstream
+    // moves the CUDA minor between releases, and an update check that did not
+    // group them would report "already latest" forever.
+    #[test]
+    fn test_backend_category_groups_across_a_cuda_minor_bump() {
+        assert_eq!(
+            get_backend_category("win-cuda-12.4-x64"),
+            get_backend_category("win-cuda-12.6-x64")
+        );
+        assert_ne!(
+            get_backend_category("win-cuda-12.4-x64"),
+            get_backend_category("win-cuda-13.3-x64")
+        );
+        assert_eq!(get_backend_category("ubuntu-x64").as_deref(), Some("cpu"));
     }
 }
 
@@ -2430,17 +2234,11 @@ pub async fn fetch_backend_checksums(
     source: String,
     proxy: Option<ProxyConfig>,
 ) -> Result<HashMap<String, String>, String> {
-    let url = if source == "cdn" {
-        format!(
-            "https://catalog.jan.ai/llama.cpp/releases/{}/checksum.yml",
-            version
-        )
-    } else {
-        format!(
-            "https://github.com/janhq/llama.cpp/releases/download/{}/checksum.yml",
-            version
-        )
-    };
+    // ggml-org publishes no checksum manifest, so this 404s and verification is
+    // skipped. Kept rather than deleted: the fetch is fail-soft by design, and
+    // the day upstream starts publishing one this picks it up with no change.
+    let _ = source;
+    let url = format!("{}/{}/checksum.yml", RELEASE_DOWNLOAD, version);
 
     let client = build_http_client(proxy.as_ref())?;
     let resp = match client.get(&url).send().await {

@@ -11,6 +11,7 @@ import { getSystemInfo } from '@janhq/tauri-plugin-hardware-api'
 import { fs, getJanDataFolderPath, events } from '@janhq/core'
 import { invoke } from '@tauri-apps/api/core'
 import { dirname } from '@tauri-apps/api/path'
+import { normalizeBackendLayout } from '../layout'
 
 // Mock constants
 const MOCK_JAN_PATH_STRING = '/path/to/jan'
@@ -39,6 +40,11 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 vi.mock('@janhq/tauri-plugin-hardware-api', () => ({
   getSystemInfo: vi.fn(),
+}))
+// Layout normalization has its own filesystem concerns; these tests cover the
+// download flow's ordering, not the move itself.
+vi.mock('../layout', () => ({
+  normalizeBackendLayout: vi.fn().mockResolvedValue('/bin/llama-server'),
 }))
 vi.mock('../util', () => ({
   getProxyConfig: vi.fn().mockResolvedValue({ enabled: false }),
@@ -518,6 +524,59 @@ describe('Backend functions', () => {
         path: backendTarPath,
         outputDir: `${MOCK_JAN_PATH_STRING}/llamacpp/backends/v1.0.0/win-avx2-x64`,
       })
+    })
+
+    // Upstream's Windows zips are flat, so `build/bin` does not exist until the
+    // layout is normalized -- and the CUDA redistributable is unpacked into
+    // exactly that directory. Normalizing after both archives would leave the
+    // cudart DLLs stranded where llama-server cannot resolve them.
+    it('normalizes the backend layout before unpacking the CUDA runtime', async () => {
+      vi.stubGlobal('IS_WINDOWS', true)
+      vi.mocked(getSystemInfo).mockResolvedValue({
+        os_type: 'windows',
+        cpu: { arch: 'x86_64', extensions: [] },
+        gpus: [],
+      } as any)
+
+      const backendDir = `${MOCK_JAN_PATH_STRING}/llamacpp/backends/b10883/win-cuda-12.4-x64`
+      const taskId = 'llamacpp-b10883-win-cuda-12-4-x64'
+      const mockItems = [
+        {
+          url: 'https://github.com/ggml-org/llama.cpp/releases/download/b10883/llama-b10883-bin-win-cuda-12.4-x64.zip',
+          save_path: `${backendDir}/backend.zip`,
+          model_id: taskId,
+        },
+        {
+          url: 'https://github.com/ggml-org/llama.cpp/releases/download/b10883/cudart-llama-bin-win-cuda-12.4-x64.zip',
+          save_path: `${backendDir}/build/bin/cudart.zip`,
+          model_id: taskId,
+        },
+      ]
+
+      const order: string[] = []
+      vi.mocked(invoke).mockImplementation(
+        async (command: string, args: any) => {
+          if (command === 'plugin:llamacpp|build_backend_download_items')
+            return mockItems
+          if (command === 'decompress') order.push(`decompress:${args.path}`)
+          return undefined
+        }
+      )
+      vi.mocked(normalizeBackendLayout).mockImplementation(async () => {
+        order.push('normalize')
+        return `${backendDir}/build/bin/llama-server.exe`
+      })
+      vi.mocked(dirname).mockImplementation(async (p: string) =>
+        p.slice(0, p.lastIndexOf('/'))
+      )
+
+      await downloadBackend('win-cuda-12.4-x64', 'b10883')
+
+      expect(order).toEqual([
+        `decompress:${backendDir}/backend.zip`,
+        'normalize',
+        `decompress:${backendDir}/build/bin/cudart.zip`,
+      ])
     })
 
     it('should fall back to CDN when GitHub download fails', async () => {

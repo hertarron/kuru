@@ -166,20 +166,21 @@ describe('generatePreset MTP emission', () => {
 })
 
 describe('generatePreset parallel reservation', () => {
-  it('adds one reserved background slot on top of the global parallel value', async () => {
+  it('adds the reserved background slots on top of the global parallel value', async () => {
     setupModel('llama', {})
     await generatePreset('/p', '/jan', { parallel: 1 } as any, {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
-    expect(ini).toContain('parallel = 2')
+    // 1 user slot + 2 reserved (auto-titling, Cowork).
+    expect(ini).toContain('parallel = 3')
   })
 
-  it('adds one reserved background slot on top of a per-model parallel override', async () => {
+  it('adds the reserved background slots on top of a per-model parallel override', async () => {
     setupModel('llama', { parallel: 3 })
     await generatePreset('/p', '/jan', {} as any, { supportsMtp: false })
     const ini = writtenFiles['/p/router.preset.ini']
-    expect(ini).toContain('parallel = 4')
+    expect(ini).toContain('parallel = 5')
   })
 
   it('omits parallel when unset, leaving llama.cpp auto-default untouched', async () => {
@@ -217,7 +218,7 @@ describe('generatePreset kv-unified', () => {
       supportsMtp: false,
     })
     const ini = writtenFiles['/p/router.preset.ini']
-    expect(ini).toContain('parallel = 2')
+    expect(ini).toContain('parallel = 3')
     expect(ini).toContain('kv-unified = true')
   })
 

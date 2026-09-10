@@ -1,6 +1,7 @@
 import { getJanDataFolderPath, fs, joinPath, events, logger } from '@janhq/core'
 import { invoke } from '@tauri-apps/api/core'
 import { getProxyConfig } from './util'
+import { normalizeBackendLayout } from './layout'
 import { dirname } from '@tauri-apps/api/path'
 import { getSystemInfo } from '@janhq/tauri-plugin-hardware-api'
 import {
@@ -261,8 +262,26 @@ export async function downloadBackend(
       proxyConfig
     )
 
-    for (const { save_path } of itemsWithProxy) {
-      // Official Windows HIP assets ship as .zip; everything else is .tar.gz.
+    // Order matters: the backend archive is unpacked and normalized first, so
+    // that `build/bin/` exists for the CUDA redistributable to land in. Upstream
+    // Windows zips are flat and Linux tarballs nest, and the cudart DLLs are
+    // only found when they sit beside llama-server.
+    const serverName = sysInfo.os_type === 'windows'
+      ? 'llama-server.exe'
+      : 'llama-server'
+    const backendArchives = itemsWithProxy.filter((i) =>
+      /[\\/]backend\.(tar\.gz|zip)$/.test(i.save_path)
+    )
+    const rest = itemsWithProxy.filter((i) => !backendArchives.includes(i))
+
+    for (const { save_path } of backendArchives) {
+      const parentDir = await dirname(save_path)
+      await invoke('decompress', { path: save_path, outputDir: parentDir })
+      await fs.rm(save_path)
+      await normalizeBackendLayout(parentDir, serverName)
+    }
+
+    for (const { save_path } of rest) {
       if (save_path.endsWith('.tar.gz') || save_path.endsWith('.zip')) {
         const parentDir = await dirname(save_path)
         await invoke('decompress', { path: save_path, outputDir: parentDir })
