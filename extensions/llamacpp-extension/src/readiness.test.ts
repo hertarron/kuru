@@ -7,13 +7,15 @@ import {
 } from './readiness'
 
 describe('backendImpliesGpu', () => {
-  it('recognizes every GPU variant Jan ships', () => {
+  it('recognizes every GPU variant upstream ships', () => {
     for (const backend of [
-      'linux-cuda-12-common_cpus-x64',
-      'linux-cuda-11-common_cpus-x64',
-      'win-cuda-13-common_cpus-x64',
-      'linux-vulkan-common_cpus-x64',
-      'linux-hip-common_cpus-x64',
+      'win-cuda-12.4-x64',
+      'win-cuda-13.3-x64',
+      'win-vulkan-x64',
+      'ubuntu-vulkan-arm64',
+      // AMD builds are named `rocm`, not `hip`.
+      'win-rocm-10.0-x64',
+      'ubuntu-rocm-10.0-x64',
     ]) {
       expect(backendImpliesGpu(backend), backend).toBe(true)
     }
@@ -21,11 +23,10 @@ describe('backendImpliesGpu', () => {
 
   it('does not flag CPU variants', () => {
     for (const backend of [
-      'linux-common_cpus-x64',
-      'win-common_cpus-x64',
-      'win-arm64',
-      'linux-noavx-x64',
-      'linux-avx2-x64',
+      'win-cpu-x64',
+      'win-cpu-arm64',
+      'ubuntu-x64',
+      'ubuntu-arm64',
     ]) {
       expect(backendImpliesGpu(backend), backend).toBe(false)
     }

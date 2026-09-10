@@ -509,34 +509,14 @@ pub async fn prioritize_backends(
         return Err("No backends available".to_string());
     }
 
-    // Priority list based on GPU memory
+    // Categories as `get_backend_category` reports them, best first. These must
+    // stay in step with it: a name that no longer matches does not error, it
+    // silently falls through to the next line -- which is how an NVIDIA box
+    // ended up on the Vulkan build.
     let backend_priorities: Vec<&str> = if has_enough_gpu_memory {
-        vec![
-            "cuda-cu13.0",
-            "cuda-cu12.0",
-            "cuda-cu11.7",
-            "hip",
-            "vulkan",
-            "common_cpus",
-            "avx512",
-            "avx2",
-            "avx",
-            "noavx",
-            "arm64",
-            "x64",
-        ]
+        vec!["cuda-13", "cuda-12", "rocm", "vulkan", "cpu"]
     } else {
-        vec![
-            "common_cpus",
-            "avx512",
-            "avx2",
-            "avx",
-            "noavx",
-            "arm64",
-            "x64",
-            "hip",
-            "vulkan",
-        ]
+        vec!["cpu", "rocm", "vulkan"]
     };
 
     // Find best matching backend
@@ -2183,6 +2163,51 @@ mod tests {
     // The whole point of keying on family rather than the full token: upstream
     // moves the CUDA minor between releases, and an update check that did not
     // group them would report "already latest" forever.
+    // Regression: the priority list is matched against `get_backend_category`
+    // by string. When the categories were renamed for the upstream asset
+    // tokens and this list was not, CUDA stopped matching and every NVIDIA
+    // machine silently fell through to the Vulkan build.
+    #[tokio::test]
+    async fn test_prioritize_backends_prefers_cuda_over_vulkan() {
+        let available = vec![
+            BackendInfo {
+                version: "b10883".into(),
+                backend: "win-cpu-x64".into(),
+            },
+            BackendInfo {
+                version: "b10883".into(),
+                backend: "win-vulkan-x64".into(),
+            },
+            BackendInfo {
+                version: "b10883".into(),
+                backend: "win-cuda-12.4-x64".into(),
+            },
+        ];
+
+        let best = prioritize_backends(available.clone(), true).await.unwrap();
+        assert_eq!(best.backend_type, "win-cuda-12.4-x64");
+
+        // Without the VRAM for it, CPU wins and CUDA is not considered.
+        let best = prioritize_backends(available, false).await.unwrap();
+        assert_eq!(best.backend_type, "win-cpu-x64");
+    }
+
+    #[tokio::test]
+    async fn test_prioritize_backends_prefers_the_newer_cuda_major() {
+        let available = vec![
+            BackendInfo {
+                version: "b10883".into(),
+                backend: "win-cuda-12.4-x64".into(),
+            },
+            BackendInfo {
+                version: "b10883".into(),
+                backend: "win-cuda-13.3-x64".into(),
+            },
+        ];
+        let best = prioritize_backends(available, true).await.unwrap();
+        assert_eq!(best.backend_type, "win-cuda-13.3-x64");
+    }
+
     #[test]
     fn test_backend_category_groups_across_a_cuda_minor_bump() {
         assert_eq!(

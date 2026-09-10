@@ -56,7 +56,9 @@ export interface EmbeddingVectorCheck {
 // Substrings of a backend variant id that mean layers are meant to run on a
 // GPU. Metal is excluded: it is implicit on Apple Silicon and always present,
 // so a macOS build can never be "a GPU build that found no GPU".
-const GPU_BACKEND_MARKERS = ['cuda', 'vulkan', 'hip']
+// 'rocm' as well as 'hip': upstream names its AMD builds `win-rocm-10.0-x64`,
+// which carries no 'hip' substring.
+const GPU_BACKEND_MARKERS = ['cuda', 'vulkan', 'hip', 'rocm']
 
 export function backendImpliesGpu(backend: string): boolean {
   const lower = (backend ?? '').toLowerCase()
